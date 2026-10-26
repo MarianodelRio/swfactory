@@ -237,9 +237,9 @@ reviewer** (`claude` or `codex`). Each can have its model and effort, said the w
 
 The Factory turns "opus 5.5" into the model's id with Orca's model catalog (`swfactory models`
 lists them) and refuses a model or effort it doesn't know, showing the ones it does. Without the
-catalog, a Claude model said as a family and a version is completed to Claude's id scheme ("opus
-5.5" and "opus-5.5" are `claude-opus-5-5`); any other name (an alias such as `opus`) is passed as
-written. What you leave
+catalog, what you say is completed to the provider's id scheme when it follows it: Claude's
+("opus 5.5" and "opus-5.5" are `claude-opus-5-5`; aliases such as `Opus` become `opus`) and
+OpenAI's for Codex ("GPT 6.1 Sol" is `gpt-6.1-sol`); any other name is passed as written. What you leave
 out comes from `[agents]` in `.factory/config.toml`; if no lead is set there either, it asks once
 and suggests your last choice. The quality review runs as a subagent of the lead, with its model.
 
@@ -607,7 +607,7 @@ expect. Use double quotes in them (`python -c "print(1)"`) so they work everywhe
   the Factory expects; this has not been checked.
 - **Orca doesn't report the model an agent used.** The Factory records the model it asked for, if
   any. Model names are resolved with Orca's model catalog, an internal file; when it can't be read,
-  a Claude family and version is completed to Claude's id scheme (not checked further) and any
+  Claude and GPT names are completed to their provider's id scheme (not checked further) and any
   other name is passed as you wrote it.
 - **macOS and Windows** pass every test in the CI but have not been used with a real Orca yet. On
   Windows the Factory looks for Orca's hook files under `%APPDATA%\orca`, which is an assumption.

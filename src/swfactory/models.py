@@ -1,10 +1,12 @@
 """The models an agent can run, from Orca's model catalog, and turning what the person says
-("opus 5.5", "Sonnet 4.6") into the provider's model id.
+("opus 5.5", "GPT 6.1 Sol") into the provider's model id.
 
 The catalog is an internal file of Orca (`agent-model-catalog.json` in its settings folder). If it
-cannot be read, or does not list the agent, a Claude model said as a family and version is
-completed to Claude's id scheme ("opus 5.5" is `claude-opus-5-5`); any other name is passed as the
-person wrote it (with spaces turned into dashes). A warning says so either way.
+cannot be read, or does not list the agent, what the person said is completed to the provider's id
+scheme when it follows it: Claude's `claude-<family>-<major>-<minor>` ("opus 5.5" is
+`claude-opus-5-5`) and its aliases in lowercase (`Opus` is `opus`), and OpenAI's lowercase
+`gpt-<version>[-<tier>]` ("GPT 6.1 Sol" is `gpt-6.1-sol`). Any other name is passed as the person
+wrote it (with spaces turned into dashes). A warning says so either way.
 
 Raises FactoryError with these codes (EXIT_USAGE):
 - model_unknown: the catalog lists the agent but no model matches; `details` lists them.
@@ -28,6 +30,10 @@ CATALOG_FILE = "agent-model-catalog.json"
 # these families are completed.
 CLAUDE_FAMILIES = ("opus", "sonnet", "haiku", "fable")
 CLAUDE_ID = re.compile(r"(?:claude-)?([a-z]+)-(\d+(?:-\d{1,2})*)(-\d{8})?(\[1m\])?")
+# Claude Code's aliases (`default` resets to the account's model); each takes a `[1m]` suffix.
+CLAUDE_ALIAS = re.compile(r"(?:default|best|fable|opus|sonnet|haiku|opusplan)(?:\[1m\])?")
+# OpenAI's ids for Codex: gpt-<major>[.<minor>][-<tier or variant>...], always lowercase.
+GPT_ID = re.compile(r"gpt-\d+(?:\.\d+)?(?:-[a-z0-9]+)*")
 
 
 def catalog(home: Path) -> dict[str, list[dict[str, Any]]] | None:
@@ -69,9 +75,9 @@ def resolve(agent: str, wanted: str | None, effort: str | None, home: Path) -> t
         where = ("Orca's model catalog cannot be read" if known is None
                  else f"Orca's model catalog does not list {agent}")
         given = re.sub(r"\s+", "-", wanted.strip())
-        completed = _claude_id(wanted) if agent == "claude" else None
+        completed = {"claude": _claude_id, "codex": _gpt_id}.get(agent, lambda _: None)(wanted)
         if completed and completed != given:
-            return completed, [f"{where}: passing '{wanted}' as the Claude id '{completed}' (not checked)"]
+            return completed, [f"{where}: passing '{wanted}' as the {agent} model '{completed}' (not checked)"]
         return given, [f"{where}: passing the model '{given}' as given"]
     exact = [m for m in models if m["id"] == wanted.strip()]
     matches = exact or [m for m in models if _key(m["label"]) == _key(wanted)] or \
@@ -94,10 +100,20 @@ def _claude_id(wanted: str) -> str | None:
     all `claude-opus-5-5`), or None when it is not a family and a version (an alias such as `opus`,
     an older or a cloud provider's id)."""
     said = re.sub(r"[\s._]+", "-", re.sub(r"\s*\[", "[", wanted.strip().lower()))
+    if CLAUDE_ALIAS.fullmatch(said):
+        return said
     match = CLAUDE_ID.fullmatch(said)
     if match is None or not (said.startswith("claude-") or match[1] in CLAUDE_FAMILIES):
         return None
     return f"claude-{match[1]}-{match[2]}{match[3] or ''}{match[4] or ''}"
+
+
+def _gpt_id(wanted: str) -> str | None:
+    """What the person said as an OpenAI id ("GPT 6.1 Sol", "gpt6.1-sol" and "gpt-6-1-sol" are all
+    `gpt-6.1-sol`), or None when it is not a GPT model (an `o3`, a local model)."""
+    said = re.sub(r"[\s_]+", "-", wanted.strip().lower())
+    said = re.sub(r"^gpt-?(\d+)(?:[-.](\d)(?=-|$))?", lambda m: f"gpt-{m[1]}" + (f".{m[2]}" if m[2] else ""), said)
+    return said if GPT_ID.fullmatch(said) else None
 
 
 def list_models(home: Path, agent: str | None) -> dict[str, Any]:

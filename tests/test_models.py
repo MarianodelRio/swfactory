@@ -71,6 +71,31 @@ def test_without_a_catalog_a_claude_model_follows_claudes_ids(tmp_path, said, mo
     assert "cannot be read" in warnings[0]
 
 
+@pytest.mark.parametrize(("said", "model_id"), [
+    ("Opus", "opus"), ("Sonnet [1m]", "sonnet[1m]"), ("OpusPlan", "opusplan"), ("Best", "best"),
+])
+def test_without_a_catalog_claude_aliases_are_lowercased(tmp_path, said, model_id):
+    assert models.resolve("claude", said, None, tmp_path)[0] == model_id
+
+
+@pytest.mark.parametrize(("said", "model_id"), [
+    ("GPT 6.1 Sol", "gpt-6.1-sol"), ("gpt6.1-sol", "gpt-6.1-sol"), ("gpt-6-1-sol", "gpt-6.1-sol"),
+    ("GPT-5.3-Codex-Spark", "gpt-5.3-codex-spark"), ("gpt 6 luna", "gpt-6-luna"), ("gpt-5.4-mini", "gpt-5.4-mini"),
+    ("gpt-5-5", "gpt-5.5"), ("GPT 5", "gpt-5"),
+])
+def test_without_a_catalog_a_codex_gpt_model_follows_openais_ids(tmp_path, said, model_id):
+    model, warnings = models.resolve("codex", said, None, tmp_path)
+    assert model == model_id
+    assert "cannot be read" in warnings[0]
+
+
+@pytest.mark.parametrize(("said", "given"), [("o3", "o3"), ("gpt-oss:20b", "gpt-oss:20b"), ("My Model", "My-Model")])
+def test_without_a_catalog_other_codex_names_are_passed_as_given(tmp_path, said, given):
+    model, warnings = models.resolve("codex", said, None, tmp_path)
+    assert model == given
+    assert "as given" in warnings[0]
+
+
 @pytest.mark.parametrize(("said", "given"), [
     ("opus", "opus"), ("sonnet[1m]", "sonnet[1m]"), ("opusplan", "opusplan"),
     ("claude-3-5-sonnet-20241022", "claude-3-5-sonnet-20241022"),

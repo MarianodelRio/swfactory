@@ -22,8 +22,10 @@ output, the files under `.factory/` (`schema_version`), and the skills' names an
   own folder, `evidence/<task>/<UTC time>/`, so earlier events keep pointing to their own output.
 - Without Orca's model catalog, a Claude model said as a family and a version is completed to
   Claude's id scheme ("opus 5.5", "opus-5.5" and "claude-opus-5.5" are `claude-opus-5-5`) instead
-  of being passed as written, which the agent refused. Aliases and other ids are still passed as
-  written.
+  of being passed as written, which the agent refused; Claude Code's aliases are lowercased
+  (`Opus` is `opus`, `Sonnet [1m]` is `sonnet[1m]`). For Codex, a GPT model is completed to
+  OpenAI's lowercase ids ("GPT 6.1 Sol", "gpt6.1-sol" are `gpt-6.1-sol`). Other names are still
+  passed as written.
 - `/factory-init` updates the `## Software Factory` section of `AGENTS.md` when the person has not
   edited it (its hash is recorded in `[templates]`, and the sections earlier versions installed are
   recognized); an edited section is shown as a diff, never overwritten.
