@@ -1,3 +1,5 @@
+import sys
+
 import pytest
 
 from swfactory.design import command_problem, command_warnings, digest, next_change_id, parse_design, scope_overlaps
@@ -204,10 +206,14 @@ def test_acceptance_commands_that_need_a_shell_are_refused(command):
 @pytest.mark.parametrize("command", [
     "pytest tests/x.py::test_a -k 'a or b'", 'python -c "import sys; sys.exit(0 if 2 > 1 else 1)"',
     "bash -c 'pytest -q | grep passed && test -f out.txt'", "grep -q 'end$' notes.txt", 'npm test -- --grep "a b"',
-    "grep -E foo\\|bar notes.txt",
 ])
 def test_acceptance_commands_without_shell_syntax_are_accepted(command):
     assert command_problem(command) is None
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="a backslash is not an escape on Windows")
+def test_an_escaped_operator_is_text():
+    assert command_problem("grep -E foo\\|bar notes.txt") is None
 
 
 def test_acceptance_programs_not_found_are_warned(tmp_path):
