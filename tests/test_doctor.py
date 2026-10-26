@@ -123,3 +123,16 @@ def test_no_ask_warning_once_configured(project, capsys):
     (project.root / ".factory").mkdir()
     (project.root / ".factory/config.toml").write_text('schema_version = 1\n[checks]\ntest = "pytest"\n')
     assert not any("check commands" in w for w in doctor(capsys)["warnings"])
+
+
+def test_stale_skill_and_command_names_are_warned(project, capsys):
+    (project.root / "AGENTS.md").write_text("Use /factory-implement CHG-3.1.\n")
+    (project.root / "docs/how").mkdir(parents=True)
+    (project.root / "docs/how/flow.md").write_text("Run `factory task verify`.\n")
+    (project.root / "docs/decisions").mkdir()
+    (project.root / "docs/decisions/0001-x.md").write_text("We chose /factory-implement.\n")
+    (project.root / "docs/index.md").write_text("Use /factory-build and `swfactory task verify`.\n")
+    warnings = doctor(capsys)["warnings"]
+    assert "AGENTS.md still mentions /factory-implement: it is now /factory-build" in warnings
+    assert any(w.startswith("docs/how/flow.md still mentions the `factory` command") for w in warnings)
+    assert not any("decisions" in w or "index.md" in w for w in warnings)

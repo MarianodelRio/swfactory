@@ -18,12 +18,14 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import shlex
+import shutil
 from pathlib import Path
 from typing import Any
 
 import yaml
 
-from swfactory import git, orca, sync, tasks
+from swfactory import git, orca, sync, system, tasks
 from swfactory.output import EXIT_PRECONDITION, FactoryError
 from swfactory.state import TaskStore, now
 
@@ -224,6 +226,8 @@ def _validate_tasks(
                         errors.append(f"{name}: {ac} is not in '## Acceptance criteria'")
                     if not isinstance(how, str) or not how.strip():
                         errors.append(f"{name}: {ac} needs a command or 'manual'")
+                    elif how != "manual" and (problem := command_problem(how)):
+                        errors.append(f"{name}: {ac} {problem}")
                     covered.add(str(ac))
 
     for ac in criteria:
@@ -233,6 +237,52 @@ def _validate_tasks(
     cycle = _find_cycle(tasks, own)
     if cycle:
         errors.append(f"dependency cycle: {' -> '.join(cycle)}")
+
+
+# Outside quotes a shell would read these; `task verify` runs a command without a shell, so they
+# would reach the program as text. Inside quotes they are text anyway (`bash -c "a | b"` is fine).
+SHELL_OPERATORS = {"|": "a pipe", "&": "'&' or '&&'", ";": "';'", "<": "a redirection", ">": "a redirection",
+                   "*": "a glob", "`": "a command substitution"}
+SHELL_EXPANSION = re.compile(r"\$[({\w]")
+SHELL_HINT = "`task verify` runs it without a shell: wrap it as bash -c '...' or make the AC manual"
+
+
+def command_problem(command: str) -> str | None:
+    """Why an AC command would not run as written under `task verify`, or None."""
+    quote, escaped = None, False
+    for index, char in enumerate(command):
+        if escaped:
+            escaped = False
+        elif quote:
+            quote = None if char == quote else quote
+        elif char == "\\" and not system.WINDOWS:  # `\|` is a literal `|` (Windows paths use `\`)
+            escaped = True
+        elif char in "'\"":
+            quote = char
+        elif char in SHELL_OPERATORS:
+            return f"uses {SHELL_OPERATORS[char]}; {SHELL_HINT}"
+        elif SHELL_EXPANSION.match(command, index):
+            return f"uses a shell expansion ($); {SHELL_HINT}"
+    try:
+        shlex.split(command)
+    except ValueError as exc:
+        return f"is not a valid command ({exc})"
+    return None
+
+
+def command_warnings(tasks: list[dict[str, Any]], root: Path) -> list[str]:
+    """AC commands whose program is not found here: a sentence instead of a command, or a tool
+    that `task verify` will not find either. A warning, since the workspace may differ."""
+    warnings = []
+    for task in tasks:
+        for ac, how in (task.get("acceptance") or {}).items():
+            if how == "manual":
+                continue
+            program = system.program(how)
+            if not (shutil.which(program) or (root / program).is_file()):
+                warnings.append(f"{task['id']}: {ac} runs '{program}', which is not found here: "
+                                "check it is a command, or make the AC manual")
+    return warnings
 
 
 def _find_cycle(tasks: list[dict[str, Any]], own: set[str]) -> list[str] | None:
@@ -323,7 +373,8 @@ def register(change_id: str, changes_dir: Path) -> tuple[dict[str, Any], list[st
     _refuse_rejected(change_id, folder)
     text = _design_text(folder)
     parsed = parse_design(text, change_id, known_tasks(changes_dir, exclude=change_id))
-    return {"change": change_id, "digest": digest(text), **parsed}, scope_overlaps(parsed["tasks"])
+    warnings = scope_overlaps(parsed["tasks"]) + command_warnings(parsed["tasks"], changes_dir.parent.parent)
+    return {"change": change_id, "digest": digest(text), **parsed}, warnings
 
 
 def show(change_id: str, changes_dir: Path, store: TaskStore, main_changes_dir: Path) -> dict[str, Any]:
@@ -469,6 +520,7 @@ def approve(
     commit = _write_and_commit(folder, files, f"Approve {change_id}")
     tasks.sync_with_design(approved_task_ids(folder), True, store)
     warnings += sync.push_approvals(main_checkout, base)
+    warnings += command_warnings(parsed["tasks"], changes_dir.parent.parent)
     return {"change": change_id, "digest": current, "commit": commit, "tasks": parsed["tasks"]}, warnings
 
 

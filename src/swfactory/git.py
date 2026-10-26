@@ -130,6 +130,32 @@ def is_clean(cwd: Path) -> bool:
     return not run(["status", "--porcelain", "--untracked-files=no"], cwd)
 
 
+# Files an agent's client writes in a workspace that are not part of the work.
+LOCAL_FILES = (".claude/settings.local.json",)
+
+
+def uncommitted(cwd: Path) -> tuple[list[str], list[str]]:
+    """(changed tracked files, untracked files that are not ignored), leaving out the Factory's own
+    (`.factory/`) and the agent clients' local settings."""
+    entries = iter(run(["status", "--porcelain=v2", "-z", "--untracked-files=all"], cwd).split("\0"))
+    changed: list[str] = []
+    untracked: list[str] = []
+    for entry in entries:
+        kind = entry[:2]
+        if kind == "? ":
+            untracked.append(entry[2:])
+        elif kind in ("1 ", "2 ", "u "):
+            fields = {"1 ": 8, "2 ": 9, "u ": 10}[kind]
+            changed.append(entry.split(" ", fields)[fields])
+            if kind == "2 ":
+                next(entries, None)  # a rename's original path
+
+    def work(path: str) -> bool:
+        return not path.startswith(".factory/") and path not in LOCAL_FILES
+
+    return [p for p in changed if work(p)], [p for p in untracked if work(p)]
+
+
 def show_file(ref: str, path: str, cwd: Path | None = None) -> str | None:
     """Content of `path` in `ref`, or None if it is not there."""
     return _try(["show", f"{ref}:{path}"], cwd)

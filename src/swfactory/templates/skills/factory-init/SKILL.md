@@ -2,7 +2,7 @@
 name: factory-init
 description: Prepare or update a repository for the Software Factory on local Orca. Analyzes the repo, proposes one plan (files to create, modify, delete with reason, respect and migrate from another workflow, plus Orca actions) and applies it after a single confirmation, with backups. Use when the person says /factory-init, asks to prepare, install or update the Factory in a repo, or asks for "only the analysis" ("solo el análisis").
 ---
-<!-- factory-template: skills/factory-init@2 -->
+<!-- factory-template: skills/factory-init@3 -->
 
 # /factory-init
 
@@ -39,7 +39,8 @@ first: `orca skills get orca-cli`.
    options as the plan, and `--exclude <path>` for each excluded file (or the action id, e.g.
    `skills-update`, for an Orca action). If it answers `plan_changed`, plan again and confirm again. Every modified or deleted file is backed up under `.factory/state/backups/<timestamp>/`.
    Files customized since the last install are shown as a diff and never overwritten without
-   asking.
+   asking. That includes the `## Software Factory` section of `AGENTS.md`: an untouched one is
+   updated to the current template; an edited one is shown as a diff for the person to merge.
 6. **Write the initial documentation** from evidence: read the real code, manifests and CI, and
    fill `AGENTS.md` and `docs/` following their template comments, adapted to the repo size
    (small: `AGENTS.md` + `docs/conventions.md`; normal: the full structure with `docs/index.md`;
@@ -50,7 +51,10 @@ first: `orca skills get orca-cli`.
    backup, `.factory/state/backups/<timestamp>/files/`). Write only what is not
    easily deduced from the code, with real paths and principles. Link existing documentation
    instead of copying it. Mark what you could not confirm. Keep `AGENTS.md` within 60–120 lines.
-7. **Validate**: run `swfactory doctor --json` again and check that it reports no problem.
+7. **Validate**: run `swfactory doctor --json` again and check that it reports no problem. Each
+   "still mentions" warning names a file with an old skill or command name (`/factory-implement`
+   is now `/factory-build`): fix those references in `AGENTS.md`, `CLAUDE.md`, `README.md` and
+   `docs/` (never in `docs/decisions/`, which is history).
 8. **Summarize**: what was done, what was migrated, the pending work found in trackers (each one a
    candidate for `/factory-design`), what remains to complete in `docs/`, and how to start
    (`/factory-design`). Nothing is committed: the person reviews the diff and commits (or asks

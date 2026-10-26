@@ -48,6 +48,7 @@ def doctor(root: Path, main_checkout: Path) -> dict[str, Any]:
     if configured is None and any(v == "ask" for v in report["checks"].values()):
         warnings.append("some check commands were not found: ask the person for them")
     warnings += _permission_warnings(root)
+    warnings += _stale_references(root)
     report["problems"] = problems
     report["warnings"] = warnings
     return report
@@ -205,6 +206,30 @@ def _permission_warnings(root: Path) -> list[str]:
     return warnings
 
 
+# Names that older versions wrote into a repository's instructions, and what replaced them.
+STALE_NAMES = (
+    (re.compile(r"/factory-implement\b"), "/factory-implement", "/factory-build"),
+    (re.compile(r"`factory (?:task|design|board|doctor|init|status)\b"), "the `factory` command", "`swfactory`"),
+)
+
+
+def _stale_references(root: Path) -> list[str]:
+    """Instructions and docs that still name a renamed skill or command. Decisions are history
+    and are not checked."""
+    files = [root / name for name in ("AGENTS.md", "CLAUDE.md", "README.md")]
+    files += sorted(p for p in (root / "docs").rglob("*.md") if "decisions" not in p.relative_to(root).parts)
+    warnings = []
+    for file in files:
+        try:
+            text = file.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            continue
+        for pattern, old, new in STALE_NAMES:
+            if pattern.search(text):
+                warnings.append(f"{file.relative_to(root).as_posix()} still mentions {old}: it is now {new}")
+    return warnings
+
+
 # --- init: plan, apply, restore -------------------------------------------------
 
 SKILL_BASES = (".claude/skills", ".agents/skills")
@@ -348,13 +373,7 @@ def build_plan(root: Path, main_checkout: Path, deletes: list[tuple[str, str]]) 
 
 
 def _docs(root: Path, plan: Plan) -> None:
-    agents = _read(root, "AGENTS.md")
-    if agents is None:
-        plan.write(root, "AGENTS.md", _template("docs/AGENTS.md"), "")
-    elif "## Software Factory" not in agents:
-        section = _template("docs/AGENTS.md").split("## Software Factory", 1)[1]
-        plan.write(root, "AGENTS.md", agents.rstrip("\n") + "\n\n## Software Factory" + section,
-                   "add the Factory section")
+    _agents_section(root, plan)
     claude = _read(root, "CLAUDE.md")
     if claude is None:
         plan.write(root, "CLAUDE.md", _template("docs/CLAUDE.md"), "")
@@ -393,6 +412,59 @@ def _doc_files(root: Path) -> list[str]:
 
 def _existing_docs(root: Path) -> list[str]:
     return [p for p in _doc_files(root) if (root / p).read_text(encoding="utf-8").strip()]
+
+
+AGENTS_SECTION = "## Software Factory"
+AGENTS_KEY = "AGENTS.md#software-factory"  # its hash in [templates]
+# The Factory section of AGENTS.md as older versions installed it: replaced like an untouched file.
+PAST_AGENTS_SECTIONS = frozenset({
+    "sha256:94cb0a75b1a2bae65ff385032f3819a94fc9779970d1f5a057e4a6d4a3fde8a8",  # 2.0
+    "sha256:7dad3f117ff19a39e4517f4e6ccf2874614baeb5fc402a76dc38c47d31665d55",  # during 2.0 development
+    "sha256:f5805cf88ee68ff2dd23f7def59327853c635052999f6a6c90af641de31616e1",  # 1.0 and 1.1
+    "sha256:100f93f3f4e3c5c124477223bd74991fe849eaba1f73918caef866c3c0c6c4d1",  # before 1.0
+    "sha256:7e78452d455d473ec953fed3801fc7ef71f2f1eb0fac64a291c8ed3d3a468ca6",  # before 1.0
+})
+
+
+def _section_span(text: str) -> tuple[int, int] | None:
+    """Where the Factory section of AGENTS.md is: from its heading (maybe with more words) to the
+    next `## ` heading."""
+    match = re.search(rf"^{AGENTS_SECTION}\b[^\n]*$", text, re.MULTILINE)
+    if match is None:
+        return None
+    following = re.search(r"^## ", text[match.end():], re.MULTILINE)
+    return match.start(), match.end() + following.start() if following else len(text)
+
+
+def _section(text: str) -> str | None:
+    span = _section_span(text)
+    return text[span[0]:span[1]].rstrip() if span else None
+
+
+def _agents_section(root: Path, plan: Plan) -> None:
+    """Create AGENTS.md, add the Factory section to it, or bring that section up to date when the
+    person has not edited it (its recorded hash, or a version an older Factory installed)."""
+    template = _template("docs/AGENTS.md")
+    wanted = _section(template)
+    assert wanted is not None
+    agents = _read(root, "AGENTS.md")
+    if agents is None:
+        plan.write(root, "AGENTS.md", template, "")
+        plan.tracked[AGENTS_KEY] = _sha(wanted)
+        return
+    span = _section_span(agents)
+    if span is None:
+        plan.write(root, "AGENTS.md", agents.rstrip("\n") + "\n\n" + wanted + "\n", "add the Factory section")
+        plan.tracked[AGENTS_KEY] = _sha(wanted)
+        return
+    current = agents[span[0]:span[1]].rstrip()
+    rest = agents[span[1]:]
+    updated = agents[:span[0]] + wanted + ("\n\n" + rest if rest.strip() else "\n")
+    if current == wanted or _sha(current) in (plan.recorded.get(AGENTS_KEY), *PAST_AGENTS_SECTIONS):
+        plan.write(root, "AGENTS.md", updated, "update the Factory section to the current template")
+        plan.tracked[AGENTS_KEY] = _sha(wanted)
+    else:
+        plan.customized.append({"path": "AGENTS.md", "diff": _diff("AGENTS.md", agents, updated)})
 
 
 def _deletions(root: Path, plan: Plan, deletes: list[tuple[str, str]]) -> None:
@@ -551,8 +623,11 @@ def apply_init(
         return any(path == ex.rstrip("/") or path.startswith(ex.rstrip("/") + "/") for ex in excludes)
 
     # The [templates] table keeps the old hash of an excluded skill file, so it is not seen as customized later.
-    tracked = {p: h for p, h in plan.tracked.items() if not excluded(p)}
-    tracked |= {p: plan.recorded[p] for p in plan.tracked if excluded(p) and p in plan.recorded}
+    def file_of(key: str) -> str:
+        return key.split("#", 1)[0]  # AGENTS_KEY tracks a section of AGENTS.md
+
+    tracked = {p: h for p, h in plan.tracked.items() if not excluded(file_of(p))}
+    tracked |= {p: plan.recorded[p] for p in plan.tracked if excluded(file_of(p)) and p in plan.recorded}
     config_path = ".factory/config.toml"
     config_text = _config_text(root, plan.report, tracked)
     if not excluded(config_path):

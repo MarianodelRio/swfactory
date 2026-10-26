@@ -2,7 +2,7 @@
 name: factory-design
 description: Research, design and register a change (CHG-N) for the Software Factory, with acceptance criteria and a task block, and approve or reject it only on the person's explicit message. Use when the person wants to design, plan or specify a change or feature with /factory-design, asks to change an existing design, or says "approve CHG-N" / "apruebo CHG-N" or "reject CHG-N".
 ---
-<!-- factory-template: skills/factory-design@2 -->
+<!-- factory-template: skills/factory-design@3 -->
 
 # /factory-design
 
@@ -36,13 +36,16 @@ changes need no design: suggest `/factory-quick`.
    the id (`CHG-N`) and the `design` path. Tasks are `CHG-N.1`, `CHG-N.2`, …; the person may type
    them short (`12.1`).
 6. **Write** the `design` file from the template in `references/design-template.md`,
-   proportional to the change. Every AC says how it is verified; tasks have clear boundaries
+   proportional to the change. Every AC says how it is verified: a command `swfactory task verify`
+   runs in the task's workspace without a shell (pipes, `&&` or redirections go inside
+   `bash -c '...'`), or `manual` when only a person or a screenshot can prove it; tasks have clear boundaries
    (not micro-steps); choose `complexity` and `review` with `references/reviews.md`.
 7. **Self-review** with a subagent playing `references/roles/design_critic.md`: could another
    agent implement this correctly without this conversation? Fix what it finds.
 8. **Validate**: `swfactory design register <id> --json`. Fix every problem in `error.details`
    and run it again after each edit. Its `warnings` name independent tasks that may touch the same
-   files: add the missing `depends_on`, or split their `scope`.
+   files (add the missing `depends_on`, or split their `scope`) and AC commands whose program is not
+   found (fix the command, or make the AC `manual`).
 9. **Present** a summary (goal, decisions, risks, AC, tasks), open the design in Orca
    (`orca file open <path>`) and say how to approve: "approve <id>" ("apruebo <id>").
 10. If the person asks for changes, edit and validate again: the digest changes with every edit.

@@ -177,3 +177,52 @@ def test_unread_pause_note_stops_finish(ready_to_finish, capsys):
     assert code == 0
     assert out["data"]["paused"] is True
     assert ready_to_finish["store"].read_task(TASK)["state"] == "blocked"
+
+
+def test_gate_uncommitted_changes(ready_to_finish, capsys):
+    workspace = ready_to_finish["workspace"]
+    (workspace / "src/bookings/model.py").write_text("RULE = 'yearly'\n")
+    details = failing_gates(capsys)
+    assert any("uncommitted changes (src/bookings/model.py)" in d for d in details)
+
+
+def test_untracked_files_are_a_warning(ready_to_finish, capsys):
+    workspace = ready_to_finish["workspace"]
+    (workspace / "shot one.png").write_text("evidence\n")
+    (workspace / ".factory").mkdir(exist_ok=True)
+    (workspace / ".factory/local note.md").write_text("x\n")
+    code, out = finish(capsys)
+    assert code == 0, out
+    untracked = [w for w in out["warnings"] if w.startswith("untracked files")]
+    assert len(untracked) == 1 and "shot one.png" in untracked[0] and ".factory" not in untracked[0]
+
+
+def test_a_staged_rename_is_an_uncommitted_change(ready_to_finish, capsys):
+    from conftest import git
+    workspace = ready_to_finish["workspace"]
+    git("mv", "src/bookings/model.py", "src/bookings/rules.py", cwd=workspace)
+    assert any("src/bookings/rules.py" in d for d in failing_gates(capsys))
+
+
+def test_agent_local_files_do_not_count_as_uncommitted(ready_to_finish, capsys):
+    workspace = ready_to_finish["workspace"]
+    (workspace / ".claude").mkdir(exist_ok=True)
+    (workspace / ".claude/settings.local.json").write_text("{}\n")
+    code, out = finish(capsys)
+    assert code == 0, out
+
+
+def test_gate_checks_run_on_a_dirty_workspace(ready_to_finish, capsys):
+    store = ready_to_finish["store"]
+    store.update_task(TASK, lambda s: {**s, "checks": {**s["checks"], "dirty": True}}, "x")
+    assert any("checks ran with uncommitted changes" in d for d in failing_gates(capsys))
+
+
+def test_gate_missing_evidence(ready_to_finish, capsys):
+    store = ready_to_finish["store"]
+    record = store.read_task(TASK)
+    (store.root / record["acceptance"]["AC-02"]["evidence"]).unlink()
+    (store.root / record["checks"]["evidence"]["test"]).unlink()
+    details = failing_gates(capsys)
+    assert any("evidence of AC-02 is missing" in d for d in details)
+    assert any("evidence of the test check is missing" in d for d in details)

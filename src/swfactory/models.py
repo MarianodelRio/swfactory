@@ -2,8 +2,9 @@
 ("opus 5.5", "Sonnet 4.6") into the provider's model id.
 
 The catalog is an internal file of Orca (`agent-model-catalog.json` in its settings folder). If it
-cannot be read, or does not list the agent, the model is passed as the person wrote it (with
-spaces turned into dashes) and a warning says so.
+cannot be read, or does not list the agent, a Claude model said as a family and version is
+completed to Claude's id scheme ("opus 5.5" is `claude-opus-5-5`); any other name is passed as the
+person wrote it (with spaces turned into dashes). A warning says so either way.
 
 Raises FactoryError with these codes (EXIT_USAGE):
 - model_unknown: the catalog lists the agent but no model matches; `details` lists them.
@@ -23,6 +24,10 @@ from swfactory.output import EXIT_USAGE, FactoryError
 
 CATALOG_DIRS = (".config/orca", "Library/Application Support/orca", "AppData/Roaming/orca")
 CATALOG_FILE = "agent-model-catalog.json"
+# Claude's ids: claude-<family>-<major>[-<minor>][-<date>][1m]. Without the `claude-` prefix, only
+# these families are completed.
+CLAUDE_FAMILIES = ("opus", "sonnet", "haiku", "fable")
+CLAUDE_ID = re.compile(r"(?:claude-)?([a-z]+)-(\d+(?:-\d{1,2})*)(-\d{8})?(\[1m\])?")
 
 
 def catalog(home: Path) -> dict[str, list[dict[str, Any]]] | None:
@@ -61,9 +66,12 @@ def resolve(agent: str, wanted: str | None, effort: str | None, home: Path) -> t
     known = catalog(home)
     models = (known or {}).get(agent)
     if not models:
-        given = re.sub(r"\s+", "-", wanted.strip())
         where = ("Orca's model catalog cannot be read" if known is None
                  else f"Orca's model catalog does not list {agent}")
+        given = re.sub(r"\s+", "-", wanted.strip())
+        completed = _claude_id(wanted) if agent == "claude" else None
+        if completed and completed != given:
+            return completed, [f"{where}: passing '{wanted}' as the Claude id '{completed}' (not checked)"]
         return given, [f"{where}: passing the model '{given}' as given"]
     exact = [m for m in models if m["id"] == wanted.strip()]
     matches = exact or [m for m in models if _key(m["label"]) == _key(wanted)] or \
@@ -79,6 +87,17 @@ def resolve(agent: str, wanted: str | None, effort: str | None, home: Path) -> t
         raise FactoryError("effort_unknown", f"{model['label']} does not take the effort '{effort}'", EXIT_USAGE,
                            model["efforts"])
     return model["id"], []
+
+
+def _claude_id(wanted: str) -> str | None:
+    """What the person said as a full Claude id ("Opus 5.5", "opus-5.5" and "claude-opus-5.5" are
+    all `claude-opus-5-5`), or None when it is not a family and a version (an alias such as `opus`,
+    an older or a cloud provider's id)."""
+    said = re.sub(r"[\s._]+", "-", re.sub(r"\s*\[", "[", wanted.strip().lower()))
+    match = CLAUDE_ID.fullmatch(said)
+    if match is None or not (said.startswith("claude-") or match[1] in CLAUDE_FAMILIES):
+        return None
+    return f"claude-{match[1]}-{match[2]}{match[3] or ''}{match[4] or ''}"
 
 
 def list_models(home: Path, agent: str | None) -> dict[str, Any]:

@@ -59,8 +59,8 @@ def test_state_never_stores_secrets(claimed, capsys):  # noqa: F811
 
 def test_evidence_is_masked(claimed, capsys):  # noqa: F811
     configure(claimed, {"leak": f"python -c \"print('{TOKENS[3]}')\""})
-    cli(capsys, "task", "verify", TASK)
-    evidence = (claimed.root / ".factory/state/evidence" / TASK / "check-leak.txt").read_text()
+    _, out = cli(capsys, "task", "verify", TASK)
+    evidence = (claimed.root / ".factory/state" / out["data"]["checks"]["evidence"]["leak"]).read_text()
     assert TOKENS[3] not in evidence
 
 

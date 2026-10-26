@@ -29,9 +29,9 @@ def cli(capsys, *argv):
     return code, json.loads(capsys.readouterr().out)
 
 
-def review_file(tmp_path, kind="quality", findings=(), name="r.json", commit=None):
+def review_file(tmp_path, kind="quality", findings=(), name="r.json", commit=None, verdict="pass"):
     path = tmp_path / name
-    report = {"type": kind, "commit": commit or workspace_head(), "verdict": "pass", "findings": list(findings)}
+    report = {"type": kind, "commit": commit or workspace_head(), "verdict": verdict, "findings": list(findings)}
     path.write_text(json.dumps(report))
     return str(path)
 
@@ -126,13 +126,23 @@ def test_record_pass_with_minor_findings(working, store, tmp_path, capsys):
     assert review["commit"] == git("rev-parse", "HEAD", cwd=workspace)
 
 
-def test_verdict_is_computed_not_trusted(working, store, tmp_path, capsys):
+def test_a_pass_with_major_findings_is_recorded_as_fail(working, store, tmp_path, capsys):
     cli(capsys, "task", "submit", TASK)
-    cli(capsys, "task", "review", TASK, "--record", review_file(tmp_path, "conformance", [MAJOR]), "--agent", "claude")
+    _, out = cli(capsys, "task", "review", TASK, "--record", review_file(tmp_path, "conformance", [MAJOR]),
+                 "--agent", "claude")
     review = store.read_task(TASK)["reviews"][0]
     assert review["verdict"] == "fail"
     assert review["reviewer"] == "claude"
+    assert any("said pass" in w for w in out["warnings"])
     assert store.read_task(TASK)["state"] == "in_review"  # first round: the lead fixes it
+
+
+def test_a_fail_verdict_without_findings_is_kept(working, store, tmp_path, capsys):
+    cli(capsys, "task", "submit", TASK)
+    code, out = cli(capsys, "task", "review", TASK, "--record", review_file(tmp_path, verdict="fail"))
+    assert code == 0, out
+    assert store.read_task(TASK)["reviews"][0]["verdict"] == "fail"
+    assert any("said fail without blocker or major findings" in w for w in out["warnings"])
 
 
 def test_second_round_without_pass_blocks_and_keeps_findings(working, store, tmp_path, fake_orca, capsys):
@@ -166,9 +176,16 @@ def test_max_rounds_from_config(working, store, tmp_path, capsys):
     json.dumps({"type": "quality", "verdict": "pass", "findings": [{"severity": "huge", "problem": "x"}]}),
     json.dumps({"type": "quality", "verdict": "pass", "findings": [{"severity": "minor"}]}),
     json.dumps({"type": "quality", "verdict": "pass", "findings": "none"}),
+    "MISSING_VERDICT",
+    "BAD_VERDICT",
 ])
 def test_invalid_review_json(working, tmp_path, capsys, content):
     cli(capsys, "task", "submit", TASK)
+    if content in ("MISSING_VERDICT", "BAD_VERDICT"):
+        report = {"type": "quality", "commit": workspace_head(), "findings": []}
+        if content == "BAD_VERDICT":
+            report["verdict"] = "ok"
+        content = json.dumps(report)
     (tmp_path / "bad.json").write_text(content)
     code, out = cli(capsys, "task", "review", TASK, "--record", str(tmp_path / "bad.json"))
     assert (code, out["error"]["code"]) == (3, "review_invalid")

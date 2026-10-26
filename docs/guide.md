@@ -176,6 +176,11 @@ The **Tasks** section is a YAML block. Each task has:
 | `integrate` | Optional: `pr` (you merge its PR) or `merge` (merged as soon as it is finished); default `git.integrate` |
 | `acceptance` | Each AC of this task, with its command or `manual` |
 
+An AC command is one program with its arguments, run in the task's workspace **without a shell**.
+`swfactory design register` refuses pipes, `&&`, `;`, redirections, globs and `$VAR` outside quotes
+(wrap them as `bash -c '...'`), and warns when the program is not found, such as a sentence written
+where a command goes. What only a person or a screenshot can prove is `manual`.
+
 How `review` is usually chosen:
 
 | Task | `review` |
@@ -231,7 +236,10 @@ reviewer** (`claude` or `codex`). Each can have its model and effort, said the w
 ```
 
 The Factory turns "opus 5.5" into the model's id with Orca's model catalog (`swfactory models`
-lists them) and refuses a model or effort it doesn't know, showing the ones it does. What you leave
+lists them) and refuses a model or effort it doesn't know, showing the ones it does. Without the
+catalog, a Claude model said as a family and a version is completed to Claude's id scheme ("opus
+5.5" and "opus-5.5" are `claude-opus-5-5`); any other name (an alias such as `opus`) is passed as
+written. What you leave
 out comes from `[agents]` in `.factory/config.toml`; if no lead is set there either, it asks once
 and suggests your last choice. The quality review runs as a subagent of the lead, with its model.
 
@@ -271,7 +279,9 @@ Along the way it:
 ### Verification and evidence
 
 `swfactory task verify` runs the project checks and each AC command **in the task's workspace**, and
-saves the output as evidence. For a `manual` criterion, the agent produces real evidence (a note,
+saves the output as evidence, in a new folder for each run (`evidence/<task>/<time>/`), so the
+output of an earlier run is never overwritten. Commit before verifying: checks run while the
+workspace had uncommitted changes do not count for finishing. For a `manual` criterion, the agent produces real evidence (a note,
 a screenshot, a page snapshot) and records it. Secret files are never accepted as evidence.
 
 ### Reviews
@@ -286,7 +296,8 @@ the reviews:
   respects existing decisions.
 
 Each reviewer ends with a verdict and its findings (`blocker`, `major`, `minor`), and never edits
-files. A review passes only without `blocker` or `major` findings. Otherwise the agent fixes them,
+files. A review passes only when the reviewer says `pass` and there are no `blocker` or `major`
+findings: a reviewer's `fail` is kept even without findings. Otherwise the agent fixes them,
 verifies again and repeats that review. **After two rounds without a pass, the task is blocked**
 (`review_not_converging`), the findings are kept, and it is your call. `minor` findings don't block
 anything; they go in the PR description.
@@ -313,8 +324,10 @@ its `Status` line to "superseded by NNNN".
 `swfactory task finish` moves the task to `to_merge` only if all of these hold. Otherwise it lists what
 is missing:
 
-- every acceptance criterion is verified with evidence;
-- the project checks passed, on the last commit;
+- every acceptance criterion is verified, and its evidence file is still there;
+- the workspace has no uncommitted changes to tracked files (untracked files are only a warning:
+  they are not part of the branch);
+- the project checks passed, on the last commit and without uncommitted changes;
 - every required review passed, on the last commit that changed code;
 - memory was evaluated (even if the answer is "nothing to add");
 - the change's approval is still valid.
@@ -594,7 +607,8 @@ expect. Use double quotes in them (`python -c "print(1)"`) so they work everywhe
   the Factory expects; this has not been checked.
 - **Orca doesn't report the model an agent used.** The Factory records the model it asked for, if
   any. Model names are resolved with Orca's model catalog, an internal file; when it can't be read,
-  the model is passed as you wrote it.
+  a Claude family and version is completed to Claude's id scheme (not checked further) and any
+  other name is passed as you wrote it.
 - **macOS and Windows** pass every test in the CI but have not been used with a real Orca yet. On
   Windows the Factory looks for Orca's hook files under `%APPDATA%\orca`, which is an assumption.
   WSL works like Linux.
@@ -618,8 +632,10 @@ swfactory --version
 ```
 
 Then, in each repository, run `/factory-init` and commit what it writes. It updates the skills, the
-roles and the permission rules; files you customized are shown as a diff and never overwritten
-without asking. If the agent session does not show the new skills, restart it.
+roles, the permission rules and the `## Software Factory` section of `AGENTS.md`; files (and that
+section) you customized are shown as a diff and never overwritten without asking. `swfactory doctor`
+warns about docs that still name an old skill or command (`/factory-implement`), and
+`/factory-init` fixes them. If the agent session does not show the new skills, restart it.
 
 **From 1.x to 2.0:**
 

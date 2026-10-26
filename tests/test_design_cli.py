@@ -61,6 +61,15 @@ def test_register_validates_a_design(project, capsys):
     assert [t["id"] for t in data["tasks"]] == ["CHG-0012-01", "CHG-0012-02"]
 
 
+def test_register_warns_about_a_criterion_that_is_not_a_command(project, capsys):
+    known_dependency(project.root)
+    write_design(project.root, text=VALID.replace(
+        '"pytest tests/integration/test_calendar.py"', '"Retries show in the sync log"'))
+    code, out = cli(capsys, "design", "register", CHANGE)
+    assert code == 0, out
+    assert any("AC-03 runs 'Retries', which is not found here" in w for w in out["warnings"])
+
+
 def test_register_invalid_design_lists_problems(project, capsys):
     write_design(project.root)  # CHG-0007-03 is unknown here
     code, out = cli(capsys, "design", "register", CHANGE)

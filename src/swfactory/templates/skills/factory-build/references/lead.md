@@ -32,7 +32,9 @@ Your role: `roles/lead.md`. You own the task end to end, inside its workspace.
 
 ## Verify and submit
 
-1. `swfactory task verify <task> --json` runs the project checks and each AC command in this
+1. Commit first: `finish` refuses uncommitted changes and checks run while there were any. Keep
+   evidence files outside the repo (or ignored), so they do not end up in the branch.
+   `swfactory task verify <task> --json` runs the project checks and each AC command in this
    workspace. For a `manual` AC, produce real evidence (a note, `orca screenshot`, `orca snapshot`)
    and record it: `swfactory task verify <task> --manual AC-NN --evidence <file> --json`. Use
    computer use only when there is no programmatic way. Never record a secret file as evidence.
@@ -55,7 +57,8 @@ Your role: `roles/lead.md`. You own the task end to end, inside its workspace.
   can return before the agent has finished, so never take its output as the answer by itself.
 - Each reviewer ends with JSON (`type`, `commit`, `verdict`, `findings`). Save it to a file outside
   the repo (so it is not committed) and record it: `swfactory task review <task> --record <file> --json`.
-- Fix `blocker` and `major` findings, verify again and repeat that review. After two rounds
+- Fix `blocker` and `major` findings (or, for a `fail` without them, what the reviewer says must
+  change), verify again and repeat that review. After two rounds
   without `pass` the CLI blocks the task with the findings saved: stop and tell the person.
   `minor` findings do not block; they go to the PR.
 - Reviewers never edit files or approve anything.

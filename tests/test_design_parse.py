@@ -1,6 +1,6 @@
 import pytest
 
-from swfactory.design import digest, next_change_id, parse_design, scope_overlaps
+from swfactory.design import command_problem, command_warnings, digest, next_change_id, parse_design, scope_overlaps
 from swfactory.output import EXIT_PRECONDITION, FactoryError
 
 VALID = """# CHG-0012 — Recurring bookings
@@ -189,6 +189,37 @@ def test_bad_acceptance_values():
     details = errors_of(text)
     assert any("AC-02" in e for e in details)
     assert any("AC1" in e for e in details)
+
+
+@pytest.mark.parametrize("command", [
+    "pytest tests/x.py | tee out.txt", "make build && make test", "test -f a; test -f b", "pytest > out.txt",
+    "ls tests/*.py", "echo $HOME", "test -n `date`", "grep 'unclosed",
+])
+def test_acceptance_commands_that_need_a_shell_are_refused(command):
+    text = replace('"pytest tests/bookings/test_recurrence.py::test_weekly"', repr(command))
+    details = errors_of(text)
+    assert any(e.startswith("CHG-0012-01: AC-01 ") for e in details), details
+
+
+@pytest.mark.parametrize("command", [
+    "pytest tests/x.py::test_a -k 'a or b'", 'python -c "import sys; sys.exit(0 if 2 > 1 else 1)"',
+    "bash -c 'pytest -q | grep passed && test -f out.txt'", "grep -q 'end$' notes.txt", 'npm test -- --grep "a b"',
+    "grep -E foo\\|bar notes.txt",
+])
+def test_acceptance_commands_without_shell_syntax_are_accepted(command):
+    assert command_problem(command) is None
+
+
+def test_acceptance_programs_not_found_are_warned(tmp_path):
+    (tmp_path / "scripts").mkdir()
+    (tmp_path / "scripts/check.sh").write_text("#!/bin/sh\n")
+    tasks = [{"id": "CHG-1.1", "acceptance": {
+        "AC-01": "python -c 'print(1)'", "AC-02": "manual", "AC-03": "scripts/check.sh --fast",
+        "AC-04": "The calendar shows four occurrences", "AC-05": "no-such-tool-xyz run"}}]
+    warnings = command_warnings(tasks, tmp_path)
+    assert len(warnings) == 2
+    assert warnings[0].startswith("CHG-1.1: AC-04 runs 'The', which is not found here")
+    assert "AC-05 runs 'no-such-tool-xyz'" in warnings[1]
 
 
 def test_no_acceptance_criteria_section():

@@ -1,4 +1,4 @@
-<!-- factory-template: design/design.md@2 -->
+<!-- factory-template: design/design.md@3 -->
 <!-- Replace CHG-N with the id reserved by `swfactory design register` (e.g. CHG-12; tasks CHG-12.1, CHG-12.2). Keep the design proportional
      to the change; delete these comments. Everything here is in English. -->
 # CHG-N — Title
@@ -31,8 +31,8 @@ interfaces between tasks, known pitfalls.
   scope: ["src/…/**"]          # optional
   integrate: pr                # optional: pr (the person merges) or merge; default git.integrate
   acceptance:
-    AC-01: "pytest …"
-    AC-02: manual
+    AC-01: "pytest …"            # one program and its arguments, run without a shell
+    AC-02: manual                # proven by a person or a screenshot
 ```
 
 ## Risks and open questions

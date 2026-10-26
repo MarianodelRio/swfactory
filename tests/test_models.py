@@ -59,6 +59,38 @@ def test_without_a_catalog_the_model_is_passed_as_given(tmp_path):
     assert "cannot be read" in warnings[0]
 
 
+@pytest.mark.parametrize(("said", "model_id"), [
+    ("opus 5.5", "claude-opus-5-5"), ("opus-5.5", "claude-opus-5-5"), ("claude-opus-5.5", "claude-opus-5-5"),
+    ("Claude Opus 5.5", "claude-opus-5-5"), ("claude-opus-5-5", "claude-opus-5-5"), ("Sonnet 5.5", "claude-sonnet-5-5"),
+    ("claude-sonnet-4-5-20250929", "claude-sonnet-4-5-20250929"), ("opus-4-6[1m]", "claude-opus-4-6[1m]"),
+    ("claude-nova-7", "claude-nova-7"), ("Opus 4.6 [1m]", "claude-opus-4-6[1m]"),
+])
+def test_without_a_catalog_a_claude_model_follows_claudes_ids(tmp_path, said, model_id):
+    model, warnings = models.resolve("claude", said, None, tmp_path)
+    assert model == model_id
+    assert "cannot be read" in warnings[0]
+
+
+@pytest.mark.parametrize(("said", "given"), [
+    ("opus", "opus"), ("sonnet[1m]", "sonnet[1m]"), ("opusplan", "opusplan"),
+    ("claude-3-5-sonnet-20241022", "claude-3-5-sonnet-20241022"),
+    ("us.anthropic.claude-opus-4-1-20250805-v1:0", "us.anthropic.claude-opus-4-1-20250805-v1:0"),
+])
+def test_without_a_catalog_other_claude_names_are_passed_as_given(tmp_path, said, given):
+    model, warnings = models.resolve("claude", said, None, tmp_path)
+    assert model == given
+    assert "as given" in warnings[0]
+
+
+def test_a_catalog_without_the_agent_also_completes_claude_ids(tmp_path):
+    path = tmp_path / ".config/orca"
+    path.mkdir(parents=True)
+    (path / "agent-model-catalog.json").write_text(json.dumps({"entries": [CATALOG["entries"][1]]}))
+    model, warnings = models.resolve("claude", "opus 5.5", None, tmp_path)
+    assert model == "claude-opus-5-5"
+    assert "does not list claude" in warnings[0]
+
+
 def test_models_command(home, capsys):
     code, out = cli(capsys, "models", "--agent", "codex")
     assert code == 0

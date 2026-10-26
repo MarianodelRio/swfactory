@@ -136,6 +136,35 @@ def test_evidence_lives_in_the_main_checkout(claimed, store, capsys, monkeypatch
     assert not (workspace / ".factory/state").exists()
 
 
+def test_each_run_keeps_its_own_evidence(claimed, store, capsys):
+    configure(claimed, {"test": 'python -c "print(1)"'})
+    cli(capsys, "task", "verify", TASK)
+    first = store.read_task(TASK)["checks"]["evidence"]["test"]
+    configure(claimed, {"test": 'python -c "import sys; sys.exit(3)"'})
+    cli(capsys, "task", "verify", TASK)
+    second = store.read_task(TASK)["checks"]["evidence"]["test"]
+    assert first != second
+    assert "exit code: 0" in (claimed.root / ".factory/state" / first).read_text()
+    assert "exit code: 3" in (claimed.root / ".factory/state" / second).read_text()
+
+
+def test_verify_records_uncommitted_files(claimed, store, capsys):
+    configure(claimed, {"test": 'python -c "print(1)"'})
+    workspace = Path(store.read_task(TASK)["workspace"]["orca_id"].split("::", 1)[1])
+    code, out = cli(capsys, "task", "verify", TASK)
+    assert store.read_task(TASK)["checks"]["dirty"] is False
+    assert out["warnings"] == []
+    (workspace / "draft.py").write_text("x = 1\n")
+    code, out = cli(capsys, "task", "verify", TASK)
+    assert code == 0, out
+    assert store.read_task(TASK)["checks"]["dirty"] is False  # untracked: not part of the branch, a warning
+    assert any(w.startswith("untracked files") and "draft.py" in w for w in out["warnings"])
+    (workspace / "README.md").write_text("changed\n")
+    code, out = cli(capsys, "task", "verify", TASK)
+    assert store.read_task(TASK)["checks"]["dirty"] is True
+    assert any("uncommitted changes" in w for w in out["warnings"])
+
+
 def test_check_runs_the_project_checks_here(repo, fake_orca, monkeypatch, capsys):
     monkeypatch.chdir(repo.root)
     configure(repo, {"test": 'python -c "print(1)"', "lint": 'python -c "import sys; sys.exit(\'bad style\')"'})

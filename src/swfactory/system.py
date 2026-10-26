@@ -115,6 +115,13 @@ def command_line(command: str) -> list[str] | str:
     return subprocess.list2cmdline([found]) + text[len(tokens[0]):]
 
 
+def program(command: str) -> str:
+    """The program a check or acceptance command runs, split as `command_line` splits it."""
+    if not WINDOWS:
+        return shlex.split(command)[0]
+    return shlex.split(command.strip(), posix=False)[0].strip('"')
+
+
 def same_path(first: Any, second: Any) -> bool:
     """Whether two paths given as text name the same place (Windows: any case, either slash)."""
     if not first or not second:

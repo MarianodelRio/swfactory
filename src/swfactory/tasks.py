@@ -674,8 +674,9 @@ def verify(task_id: str, ctx: Context) -> tuple[dict[str, Any], list[str]]:
         _reject(record, "verify", f"it is {record['state']}")
     cfg = _config(ctx)
     cwd = workspace_path(record)
-    evidence_dir = ctx.store.root / "evidence" / task_id
-    evidence_dir.mkdir(parents=True, exist_ok=True)
+    evidence_dir = _evidence_dir(task_id, ctx)
+    changed, untracked = git.uncommitted(cwd)
+    dirty = bool(changed)
 
     results: dict[str, str] = {}
     check_evidence: dict[str, str] = {}
@@ -697,15 +698,44 @@ def verify(task_id: str, ctx: Context) -> tuple[dict[str, Any], list[str]]:
     def apply(state: State) -> State:
         if state["state"] not in ("in_progress", "in_review"):
             _reject(state, "verify", f"it became {state['state']} while verifying")
-        state["checks"] = {"status": checks_status, "at": now(), "commit": commit, "results": results,
-                           "evidence": check_evidence}
+        state["checks"] = {"status": checks_status, "at": now(), "commit": commit, "dirty": dirty,
+                           "results": results, "evidence": check_evidence}
         for ac in task["acceptance"]:
             state["acceptance"].setdefault(ac, {"status": "pending", "evidence": None})
         state["acceptance"].update(acceptance)
         return state
 
     updated = ctx.store.update_task(task_id, apply, "verify")
-    return {"task": task_id, "checks": updated["checks"], "acceptance": updated["acceptance"]}, []
+    warnings = [UNCOMMITTED_VERIFY] if dirty else []
+    warnings += _untracked_warning(untracked)
+    return {"task": task_id, "checks": updated["checks"], "acceptance": updated["acceptance"]}, warnings
+
+
+UNCOMMITTED_VERIFY = "the workspace has uncommitted changes: commit them and verify again before finishing"
+
+
+def _untracked_warning(untracked: list[str]) -> list[str]:
+    """Untracked files are not part of the branch: a new module left out would break it."""
+    if not untracked:
+        return []
+    listed = ", ".join(untracked[:5]) + (", ..." if len(untracked) > 5 else "")
+    return [f"untracked files are not part of the branch ({listed}): commit them if they belong to the work"]
+
+
+def _evidence_dir(task_id: str, ctx: Context) -> Path:
+    """A new folder for one run's evidence, `evidence/<task>/<UTC time>`, so a later run never
+    overwrites the output an earlier event points to."""
+    base = ctx.store.root / "evidence" / task_id
+    base.mkdir(parents=True, exist_ok=True)
+    stamp = datetime.datetime.now(datetime.UTC).strftime("%Y%m%dT%H%M%SZ")
+    folder, number = base / stamp, 1
+    while True:
+        try:
+            folder.mkdir()
+            return folder
+        except FileExistsError:
+            number += 1
+            folder = base / f"{stamp}-{number}"
 
 
 def _run_evidence(command: str, cwd: Path, output: Path, ctx: Context) -> tuple[str, str]:
@@ -762,8 +792,7 @@ def verify_manual(task_id: str, ac: str, evidence: Path, ctx: Context) -> tuple[
     if is_secret_file(str(evidence)):
         message = f"{evidence.name} looks like a secret (key or .env file) and cannot be evidence"
         raise FactoryError("secret_file_refused", message, EXIT_PRECONDITION)
-    target = ctx.store.root / "evidence" / task_id / f"{ac}{evidence.suffix}"
-    target.parent.mkdir(parents=True, exist_ok=True)
+    target = _evidence_dir(task_id, ctx) / f"{ac}{evidence.suffix}"
     shutil.copyfile(evidence, target)
     relative = target.relative_to(ctx.store.root).as_posix()
 
@@ -777,6 +806,7 @@ def verify_manual(task_id: str, ac: str, evidence: Path, ctx: Context) -> tuple[
 
 REVIEW_TYPES = ("quality", "conformance")
 SEVERITIES = ("blocker", "major", "minor")
+VERDICTS = ("pass", "fail")
 
 
 def effective_reviews(task: dict[str, Any], cfg: dict[str, Any]) -> list[str]:
@@ -851,15 +881,22 @@ def review(task_id: str, kind: str, agent: str | None, ctx: Context, model: str 
 
 
 def record_review(task_id: str, path: Path, agent: str | None, ctx: Context) -> tuple[dict[str, Any], list[str]]:
-    """Store a reviewer's JSON with its round and the reviewed commit. `pass` only without
-    `blocker` or `major` findings; a type that is not `pass` after `max_rounds` blocks the task
-    with the findings kept."""
+    """Store a reviewer's JSON with its round and the reviewed commit. `pass` only when the
+    reviewer says `pass` and there is no `blocker` or `major` finding; a type that is not `pass`
+    after `max_rounds` blocks the task with the findings kept."""
     task, record = _started(task_id, ctx)
     report = _review_report(path)
     kind = report["type"]
     reviewer = agent or (record["attempts"][-1].get("reviewer") if kind == "conformance" else None)
     reviewer = reviewer or f"{record['attempts'][-1].get('agent') or 'lead'}-subagent"
-    verdict = "fail" if any(f["severity"] in ("blocker", "major") for f in report["findings"]) else "pass"
+    serious = any(f["severity"] in ("blocker", "major") for f in report["findings"])
+    verdict = "fail" if serious or report["verdict"] == "fail" else "pass"
+    warnings = []
+    if serious and report["verdict"] == "pass":
+        warnings.append("the reviewer said pass but reported blocker or major findings: recorded as fail")
+    elif not serious and report["verdict"] == "fail":
+        warnings.append("the reviewer said fail without blocker or major findings: ask it what must change, "
+                        "or fix its minor findings, before repeating the review")
     cwd = workspace_path(record)
     if not git.ref_exists(report["commit"], cwd) or not git.is_ancestor(report["commit"], "HEAD", cwd):
         message = f"the reviewed commit {report['commit']} is not on the branch of {task_id}"
@@ -880,7 +917,7 @@ def record_review(task_id: str, path: Path, agent: str | None, ctx: Context) -> 
     updated = ctx.store.update_task(task_id, apply, "review")
     saved = updated["reviews"][-1]
     data = {"task": task_id, "state": updated["state"], "review": saved}
-    return data, _card(task, updated, ctx)
+    return data, warnings + _card(task, updated, ctx)
 
 
 def _review_report(path: Path) -> dict[str, Any]:
@@ -896,6 +933,8 @@ def _review_report(path: Path) -> dict[str, Any]:
         problems.append(f"type must be one of {', '.join(REVIEW_TYPES)}")
     if not isinstance(report.get("commit"), str) or not re.fullmatch(r"[0-9a-f]{7,40}", report["commit"]):
         problems.append("commit must be the reviewed commit (git rev-parse HEAD)")
+    if report.get("verdict") not in VERDICTS:
+        problems.append(f"verdict must be one of {', '.join(VERDICTS)}")
     findings = report.get("findings")
     if not isinstance(findings, list):
         problems.append("findings must be a list")
@@ -910,7 +949,7 @@ def _review_report(path: Path) -> dict[str, Any]:
             problems.append(f"finding {number}: problem is required")
     if problems:
         raise FactoryError("review_invalid", f"{path} is not a valid review", EXIT_PRECONDITION, problems)
-    return {"type": report["type"], "commit": report["commit"], "findings": findings}
+    return {"type": report["type"], "commit": report["commit"], "verdict": report["verdict"], "findings": findings}
 
 
 def finish(task_id: str, memory: str, ctx: Context) -> tuple[dict[str, Any], list[str]]:
@@ -935,15 +974,27 @@ def finish(task_id: str, memory: str, ctx: Context) -> tuple[dict[str, Any], lis
     problems: list[str] = []
 
     for ac in task["acceptance"]:
-        status = (record["acceptance"].get(ac) or {}).get("status", "pending")
+        entry = record["acceptance"].get(ac) or {}
+        status = entry.get("status", "pending")
         if status != "verified":
             problems.append(f"{ac} is {status}, not verified")
+        elif not _evidence_exists(entry.get("evidence"), ctx):
+            problems.append(f"the evidence of {ac} is missing: verify it again")
+    changed, untracked = git.uncommitted(cwd)
+    if changed:
+        problems.append(f"the workspace has uncommitted changes ({', '.join(changed[:5])}"
+                        f"{', ...' if len(changed) > 5 else ''}): commit or discard them")
     code_commit = git.last_code_commit(base, cwd)
     checks = record.get("checks") or {}
     if checks.get("status", "not_run") != "passed":
         problems.append(f"the project checks are {checks.get('status', 'not_run')}, not passed")
+    elif checks.get("dirty"):
+        problems.append("the project checks ran with uncommitted changes: commit them and verify again")
     elif not git.is_ancestor(code_commit, checks["commit"], cwd):
         problems.append("the project checks passed on an older commit: run swfactory task verify again")
+    else:
+        problems += [f"the evidence of the {name} check is missing: verify again"
+                     for name, path in (checks.get("evidence") or {}).items() if not _evidence_exists(path, ctx)]
     for kind in effective_reviews(task, _config(ctx)):
         latest = [r for r in record["reviews"] if r["type"] == kind]
         if not latest or latest[-1]["verdict"] != "pass":
@@ -970,11 +1021,16 @@ def finish(task_id: str, memory: str, ctx: Context) -> tuple[dict[str, Any], lis
     updated = ctx.store.update_task(task_id, apply, "finish")
     ctx.store.release_claim(task_id)
     warnings = [f"changed outside the task scope: {path}" for path in out_of_scope]
+    warnings += _untracked_warning(untracked)
     warnings += _card(task, updated, ctx)
     warnings += _push_quietly(updated["workspace"]["branch"], ctx)
     data = {"task": task_id, "state": "to_merge", "memory": memory, "scope_warnings": out_of_scope,
             "notes": delivered}
     return data, warnings
+
+
+def _evidence_exists(relative: str | None, ctx: Context) -> bool:
+    return bool(relative) and (ctx.store.root / str(relative)).is_file()
 
 
 def _outside_scope(task: dict[str, Any], files: list[str]) -> list[str]:

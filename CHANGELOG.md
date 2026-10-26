@@ -9,6 +9,35 @@ output, the files under `.factory/` (`schema_version`), and the skills' names an
 
 ## [Unreleased]
 
+### Fixed
+- A reviewer's `verdict` is honored: a `fail` is recorded even without blocker or major findings
+  (with a warning to ask the reviewer what must change), and a `pass` with `blocker` or `major`
+  findings is recorded as `fail`, with a warning. `verdict` (`pass` or `fail`)
+  is now required in the reviewer JSON.
+- `task finish` refuses a workspace with uncommitted changes to tracked files, checks that ran
+  while there were any, and a criterion or check whose evidence file is missing. Untracked files
+  (not ignored; `.factory/` and `.claude/settings.local.json` aside) are a warning at `verify` and
+  `finish`: they are not part of the branch.
+- Evidence is no longer overwritten: each `task verify` (and each manual evidence) is saved in its
+  own folder, `evidence/<task>/<UTC time>/`, so earlier events keep pointing to their own output.
+- Without Orca's model catalog, a Claude model said as a family and a version is completed to
+  Claude's id scheme ("opus 5.5", "opus-5.5" and "claude-opus-5.5" are `claude-opus-5-5`) instead
+  of being passed as written, which the agent refused. Aliases and other ids are still passed as
+  written.
+- `/factory-init` updates the `## Software Factory` section of `AGENTS.md` when the person has not
+  edited it (its hash is recorded in `[templates]`, and the sections earlier versions installed are
+  recognized); an edited section is shown as a diff, never overwritten.
+
+### Added
+- `swfactory design register` refuses AC commands that need a shell (pipes, `&&`, `;`,
+  redirections, globs, `$VAR` outside quotes) and, like `design approve`, warns when an AC
+  command's program is not found (a sentence written where a command goes). The design critic
+  checks every AC command as the verifier will run it, or asks for `manual`.
+- `swfactory doctor` (and the `init` plan) warn about instructions and docs that still name an old
+  skill or command (`/factory-implement`, the `factory` command); `/factory-init` fixes them.
+- `task verify` records `dirty` in the checks and warns about uncommitted changes and untracked
+  files.
+
 ## [2.0.0] - 2026-10-20
 
 A major version: `/factory-implement` is renamed `/factory-build` and `done` now means merged.
