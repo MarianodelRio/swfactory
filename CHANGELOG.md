@@ -9,6 +9,11 @@ output, the files under `.factory/` (`schema_version`), and the skills' names an
 
 ## [Unreleased]
 
+## [2.1.0] - 2026-10-26
+
+Run `/factory-init` in each repository after upgrading: it updates the skills and the
+`## Software Factory` section of `AGENTS.md`.
+
 ### Fixed
 - A reviewer's `verdict` is honored: a `fail` is recorded even without blocker or major findings
   (with a warning to ask the reviewer what must change), and a `pass` with `blocker` or `major`
@@ -165,7 +170,8 @@ First stable release, published as `swfactory` on PyPI.
 
 Initial development version (not published to a package registry).
 
-[Unreleased]: https://github.com/MarianodelRio/swfactory/compare/v2.0.0...HEAD
+[Unreleased]: https://github.com/MarianodelRio/swfactory/compare/v2.1.0...HEAD
+[2.1.0]: https://github.com/MarianodelRio/swfactory/compare/v2.0.0...v2.1.0
 [2.0.0]: https://github.com/MarianodelRio/swfactory/compare/v1.1.0...v2.0.0
 [1.1.0]: https://github.com/MarianodelRio/swfactory/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/MarianodelRio/swfactory/compare/v0.1.0...v1.0.0
