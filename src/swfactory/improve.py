@@ -207,8 +207,9 @@ def _accumulate_assistant(
         return
     usage = message.get("usage")
     if isinstance(usage, dict):
-        for key, target in (("input_tokens", "input"), ("output_tokens", "output"),
-                            ("cache_read_input_tokens", "cache_read"), ("cache_creation_input_tokens", "cache_creation")):
+        fields = (("input_tokens", "input"), ("output_tokens", "output"),
+                  ("cache_read_input_tokens", "cache_read"), ("cache_creation_input_tokens", "cache_creation"))
+        for key, target in fields:
             value = usage.get(key)
             if isinstance(value, int | float):
                 fallback[target] += value

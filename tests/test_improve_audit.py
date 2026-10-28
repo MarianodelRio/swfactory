@@ -24,8 +24,10 @@ def base(tmp_path):
 
 
 def test_clean_skills_have_no_findings(base):
-    skill(base, "factory-a", frontmatter("Does A things, used for /factory-a and related work.") + "# /factory-a\n\nDoes a thing.\n")
-    skill(base, "factory-b", frontmatter("Does B things, used for /factory-b and related work.") + "# /factory-b\n\nDoes another thing.\n")
+    skill(base, "factory-a",
+          frontmatter("Does A things, used for /factory-a and related work.") + "# /factory-a\n\nDoes a thing.\n")
+    skill(base, "factory-b",
+          frontmatter("Does B things, used for /factory-b and related work.") + "# /factory-b\n\nDoes another thing.\n")
     assert improve.audit(base)["findings"] == []
 
 

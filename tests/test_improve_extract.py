@@ -80,8 +80,9 @@ def test_state_without_any_session_is_missing_but_keeps_lifecycle(tmp_path):
 def test_full_coverage_counts_tool_calls_tokens_and_failing_commands(tmp_path):
     store = TaskStore(tmp_path / "state")
     workspace = tmp_path / "work" / "repo"
-    seed(store, TASK, workspace, reviews=[{"type": "quality", "round": 1, "verdict": "fail", "commit": "a", "findings": []},
-                                          {"type": "quality", "round": 2, "verdict": "pass", "commit": "b", "findings": []}])
+    reviews = [{"type": "quality", "round": 1, "verdict": "fail", "commit": "a", "findings": []},
+               {"type": "quality", "round": 2, "verdict": "pass", "commit": "b", "findings": []}]
+    seed(store, TASK, workspace, reviews=reviews)
     project = claude_project_dir(tmp_path / "home", workspace)
     write(project / "session-1.jsonl", "\n".join([
         tool_use_assistant("t1", "Bash", command="pytest -k broken", usage={"input_tokens": 5, "output_tokens": 7}),
