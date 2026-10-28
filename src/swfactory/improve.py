@@ -115,9 +115,8 @@ def _lifecycle(record: State) -> dict[str, Any]:
 
 def _repeated_failing(counts: Counter[str], failures: Counter[str]) -> list[dict[str, Any]]:
     keys = {c for c, n in counts.items() if n >= 2} | set(failures)
-    rows = [{"command": c, "count": counts.get(c, 0), "failures": failures.get(c, 0)} for c in keys]
-    rows.sort(key=lambda r: (-r["failures"], -r["count"]))
-    return rows[:REPEATED_LIMIT]
+    triples = sorted(((c, counts.get(c, 0), failures.get(c, 0)) for c in keys), key=lambda t: (-t[2], -t[1]))
+    return [{"command": c, "count": count, "failures": fails} for c, count, fails in triples[:REPEATED_LIMIT]]
 
 
 # --- Claude Code sessions --------------------------------------------------------------------------
@@ -236,7 +235,10 @@ def _accumulate_user_result(
     for block in content:
         if not isinstance(block, dict) or block.get("type") != "tool_result":
             continue
-        command = pending.pop(block.get("tool_use_id"), None)
+        tool_use_id = block.get("tool_use_id")
+        if not isinstance(tool_use_id, str):
+            continue
+        command = pending.pop(tool_use_id, None)
         if not command:
             continue
         command_counts[command] += 1
