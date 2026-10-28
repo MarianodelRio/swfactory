@@ -162,9 +162,14 @@ def _spool(path: Path) -> tuple[dict[str, Any] | None, list[dict[str, Any]]]:
 _claude_cache: dict[Path, tuple[float, float, dict[str, Any] | None]] = {}
 
 
+def claude_project_dir(home: Path, workspace: Path) -> Path:
+    """Where Claude Code keeps every session run in `workspace`."""
+    return home / ".claude" / "projects" / re.sub(r"[^A-Za-z0-9]", "-", str(workspace))
+
+
 def claude_subagents(home: Path, workspace: Path) -> list[dict[str, Any]]:
     """Subagents Claude Code recorded for sessions run in `workspace`."""
-    project = home / ".claude" / "projects" / re.sub(r"[^A-Za-z0-9]", "-", str(workspace))
+    project = claude_project_dir(home, workspace)
     found = []
     for meta_path in sorted(project.glob("*/subagents/*.meta.json")):
         sub = _claude_subagent(meta_path)

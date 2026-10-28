@@ -8,7 +8,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any, NoReturn
 
-from swfactory import __version__, board, config, design, init, memory, models, paths, tasks
+from swfactory import __version__, board, config, design, improve, init, memory, models, paths, tasks
 from swfactory.output import (
     EXIT_ERROR,
     EXIT_OK,
@@ -43,6 +43,10 @@ def change_id(value: str) -> str:
 
 def task_id(value: str) -> str:
     return design.full_id(value)
+
+
+def task_ids(value: str) -> list[str]:
+    return [task_id(part) for part in value.split(",") if part.strip()]
 
 
 def design_register(args: argparse.Namespace) -> Result:
@@ -185,6 +189,14 @@ def memory_check(args: argparse.Namespace) -> Result:
     return memory.check(paths.repo_root()), []
 
 
+def improve_extract(args: argparse.Namespace) -> Result:
+    return improve.extract(args.tasks, TaskStore(paths.state_dir()), Path.home()), []
+
+
+def improve_audit(args: argparse.Namespace) -> Result:
+    return improve.audit(), []
+
+
 def status(args: argparse.Namespace) -> Result:
     return tasks.status(task_context())
 
@@ -233,6 +245,8 @@ HANDLERS: dict[str, Handler] = {
     "sync": sync_command,
     "check": check_command,
     "memory check": memory_check,
+    "improve extract": improve_extract,
+    "improve audit": improve_audit,
     "doctor": doctor,
     "models": models_command,
     "init": init_command,
@@ -351,6 +365,14 @@ def build_parser() -> Parser:
     memory = groups.add_parser("memory", help="project memory maintenance")
     memory_cmds = memory.add_subparsers(dest="action", required=True, metavar="<action>")
     command(memory_cmds, "check", "memory check", "check AGENTS.md, decisions and links")
+
+    improve_group = groups.add_parser("improve", help="evidence for improving swfactory itself")
+    improve_cmds = improve_group.add_subparsers(dest="action", required=True, metavar="<action>")
+    extract_cmd = command(improve_cmds, "extract", "improve extract",
+                          "deterministic facts from task state and agent sessions")
+    extract_cmd.add_argument("--tasks", required=True, type=task_ids, metavar="CHG-N.M,...",
+                             help="comma-separated task ids")
+    command(improve_cmds, "audit", "improve audit", "check swfactory's own shipped skills")
 
     command(groups, "status", "status", "summary of changes and tasks")
     command(groups, "sync", "sync", "fetch origin and bring the base branch up to date")

@@ -5,7 +5,7 @@ import pytest
 import yaml
 
 SKILLS = ["factory-init", "factory-design", "factory-build", "factory-quick", "factory-status", "factory-board",
-          "factory-help"]
+          "factory-help", "factory-improve"]
 # Files that `swfactory init` copies into the skills when installing them.
 INSTALLED = {"references/design-template.md", "references/adr-template.md"} | {
     f"references/roles/{r}.md" for r in ("designer", "design_critic", "lead", "planner", "quality_reviewer")
@@ -64,7 +64,8 @@ def test_every_cli_command_used_exists():
         if root.joinpath("references").is_dir():
             texts += [f.read_text() for f in root.joinpath("references").iterdir()]
         for text in texts:
-            pattern = r"swfactory (doctor|init|status|sync|check|models|design \w+|task \w+|memory \w+|board \w+)"
+            pattern = (r"swfactory (doctor|init|status|sync|check|models|design \w+|task \w+|memory \w+|"
+                      r"board \w+|improve \w+)")
             commands |= set(re.findall(pattern, text))
     parser = build_parser()
     for command in commands:

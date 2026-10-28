@@ -13,9 +13,9 @@ publish → remember what was learned**
 
 It is made of:
 
-- **Seven skills** you call in plain language from an agent terminal: `/factory-init`,
-  `/factory-design`, `/factory-build`, `/factory-quick`, `/factory-status`, `/factory-board` and
-  `/factory-help`.
+- **Eight skills** you call in plain language from an agent terminal: `/factory-init`,
+  `/factory-design`, `/factory-build`, `/factory-quick`, `/factory-status`, `/factory-board`,
+  `/factory-help` and `/factory-improve`.
 - **A small CLI**, `swfactory`. The skills use it for everything that must be exact: approvals, task
   claims, state and evidence. You don't need to use it, but you can.
 - **Readable files** in your repository (`.factory/`, `AGENTS.md`, `docs/`) that hold the designs,
@@ -482,6 +482,14 @@ to commit.
 "¿cómo funciona la factory?", "¿qué significa to_merge?", "/factory-help reviews": it explains the
 skills, the flow, the states, what to say and the configuration, and tells you the next step in
 this repository with the exact phrase to use.
+
+### Improving swfactory itself: `/factory-improve`
+
+For a person-named set of past tasks ("/factory-improve", "cómo mejorar la factory"), reads their
+task state and their full Claude Code / Codex session transcripts, separates what plain code can
+count from what needs a judgment call, and proposes evidence-cited ways to reduce rework and
+quota spend — never editing this project's code, skills, docs or task state. Each proposal becomes
+a `design_<slug>.md` only after you confirm it.
 
 ## 8. Task states
 

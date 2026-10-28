@@ -9,6 +9,21 @@ output, the files under `.factory/` (`schema_version`), and the skills' names an
 
 ## [Unreleased]
 
+## [3.0.0] - 2026-10-28
+
+Run `/factory-init` in each repository after upgrading: it installs the new `/factory-improve`
+skill.
+
+### Added
+- `swfactory improve extract --tasks CHG-N.M,...` and `swfactory improve audit`: read-only,
+  `--json` commands that gather deterministic evidence (tool calls, repeated/failing commands,
+  token totals, review rounds, recoveries, subagent counts) from a task's state and its Claude
+  Code / Codex session transcripts, and structural checks over swfactory's own shipped skills
+  (size, duplicated instructions, references loaded unconditionally).
+- `/factory-improve`: a skill that uses both commands, plus its own grounding and judgment, to
+  propose evidence-cited ways to reduce rework and quota spend in swfactory itself, writing a
+  `design_<slug>.md` only after the person confirms each one.
+
 ## [2.1.0] - 2026-10-26
 
 Run `/factory-init` in each repository after upgrading: it updates the skills and the
@@ -170,7 +185,8 @@ First stable release, published as `swfactory` on PyPI.
 
 Initial development version (not published to a package registry).
 
-[Unreleased]: https://github.com/MarianodelRio/swfactory/compare/v2.1.0...HEAD
+[Unreleased]: https://github.com/MarianodelRio/swfactory/compare/v3.0.0...HEAD
+[3.0.0]: https://github.com/MarianodelRio/swfactory/compare/v2.1.0...v3.0.0
 [2.1.0]: https://github.com/MarianodelRio/swfactory/compare/v2.0.0...v2.1.0
 [2.0.0]: https://github.com/MarianodelRio/swfactory/compare/v1.1.0...v2.0.0
 [1.1.0]: https://github.com/MarianodelRio/swfactory/compare/v1.0.0...v1.1.0

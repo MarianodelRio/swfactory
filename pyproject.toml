@@ -1,6 +1,6 @@
 [project]
 name = "swfactory"
-version = "2.1.0"
+version = "3.0.0"
 description = "A method and a CLI to build software with coding agents (Claude Code, Codex) on Orca: design, approve, implement, review and publish with evidence."
 readme = "README.md"
 requires-python = ">=3.11"

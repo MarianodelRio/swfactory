@@ -8,7 +8,7 @@ from test_doctor import snapshot
 from swfactory.cli import main
 
 SKILLS = ["factory-init", "factory-design", "factory-build", "factory-quick", "factory-status", "factory-board",
-          "factory-help"]
+          "factory-help", "factory-improve"]
 
 
 @pytest.fixture
