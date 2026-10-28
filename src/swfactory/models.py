@@ -5,8 +5,8 @@ The catalog is an internal file of Orca (`agent-model-catalog.json` in its setti
 cannot be read, or does not list the agent, what the person said is completed to the provider's id
 scheme when it follows it: Claude's `claude-<family>-<major>-<minor>` ("opus 5.5" is
 `claude-opus-5-5`) and its aliases in lowercase (`Opus` is `opus`), and OpenAI's lowercase
-`gpt-<version>[-<tier>]` ("GPT 6.1 Sol" is `gpt-6.1-sol`). Any other name is passed as the person
-wrote it (with spaces turned into dashes). A warning says so either way.
+`gpt-<version>-<codename>` ("GPT 6.1 Sol" and "Sol 6.1" are both `gpt-6.1-sol`). Any other name is
+passed as the person wrote it (with spaces turned into dashes). A warning says so either way.
 
 Raises FactoryError with these codes (EXIT_USAGE):
 - model_unknown: the catalog lists the agent but no model matches; `details` lists them.
@@ -34,6 +34,12 @@ CLAUDE_ID = re.compile(r"(?:claude-)?([a-z]+)-(\d+(?:-\d{1,2})*)(-\d{8})?(\[1m\]
 CLAUDE_ALIAS = re.compile(r"(?:default|best|fable|opus|sonnet|haiku|opusplan)(?:\[1m\])?")
 # OpenAI's ids for Codex: gpt-<major>[.<minor>][-<tier or variant>...], always lowercase.
 GPT_ID = re.compile(r"gpt-\d+(?:\.\d+)?(?:-[a-z0-9]+)*")
+# OpenAI's codenames for Codex's current models (it renames this line often; update this list when
+# it does). Without the `gpt-` prefix, only these are completed, in either order with the version.
+GPT_CODENAMES = ("astra", "sol", "terra", "luna")
+GPT_BARE = re.compile(
+    r"(?:(?P<name1>{names})-(?P<ver1>\d+(?:\.\d+)?)|(?P<ver2>\d+(?:\.\d+)?)-(?P<name2>{names}))".format(
+        names="|".join(GPT_CODENAMES)))
 
 
 def catalog(home: Path) -> dict[str, list[dict[str, Any]]] | None:
@@ -109,11 +115,17 @@ def _claude_id(wanted: str) -> str | None:
 
 
 def _gpt_id(wanted: str) -> str | None:
-    """What the person said as an OpenAI id ("GPT 6.1 Sol", "gpt6.1-sol" and "gpt-6-1-sol" are all
-    `gpt-6.1-sol`), or None when it is not a GPT model (an `o3`, a local model)."""
+    """What the person said as an OpenAI id ("GPT 6.1 Sol", "Sol 6.1", "gpt6.1-sol" and
+    "gpt-6-1-sol" are all `gpt-6.1-sol`), or None when it is not a GPT model (an `o3`, a local
+    model, or a codename this version doesn't know)."""
     said = re.sub(r"[\s_]+", "-", wanted.strip().lower())
     said = re.sub(r"^gpt-?(\d+)(?:[-.](\d)(?=-|$))?", lambda m: f"gpt-{m[1]}" + (f".{m[2]}" if m[2] else ""), said)
-    return said if GPT_ID.fullmatch(said) else None
+    if GPT_ID.fullmatch(said):
+        return said
+    bare = GPT_BARE.fullmatch(said)
+    if bare is None:
+        return None
+    return f"gpt-{bare['ver1'] or bare['ver2']}-{bare['name1'] or bare['name2']}"
 
 
 def list_models(home: Path, agent: str | None) -> dict[str, Any]:

@@ -53,9 +53,9 @@ def test_unknown_model_and_effort_are_refused_with_the_list(home):
     assert (exc.value.code, exc.value.details) == ("effort_unknown", ["low", "high"])
 
 
-def test_without_a_catalog_the_model_is_passed_as_given(tmp_path):
+def test_without_a_catalog_the_model_is_completed_to_openais_id(tmp_path):
     model, warnings = models.resolve("codex", "sol 6.1", None, tmp_path)
-    assert model == "sol-6.1"
+    assert model == "gpt-6.1-sol"
     assert "cannot be read" in warnings[0]
 
 
@@ -81,7 +81,8 @@ def test_without_a_catalog_claude_aliases_are_lowercased(tmp_path, said, model_i
 @pytest.mark.parametrize(("said", "model_id"), [
     ("GPT 6.1 Sol", "gpt-6.1-sol"), ("gpt6.1-sol", "gpt-6.1-sol"), ("gpt-6-1-sol", "gpt-6.1-sol"),
     ("GPT-5.3-Codex-Spark", "gpt-5.3-codex-spark"), ("gpt 6 luna", "gpt-6-luna"), ("gpt-5.4-mini", "gpt-5.4-mini"),
-    ("gpt-5-5", "gpt-5.5"), ("GPT 5", "gpt-5"),
+    ("gpt-5-5", "gpt-5.5"), ("GPT 5", "gpt-5"), ("Sol 6.1", "gpt-6.1-sol"), ("6.1 sol", "gpt-6.1-sol"),
+    ("astra 6", "gpt-6-astra"), ("Terra 6.1", "gpt-6.1-terra"), ("luna 6", "gpt-6-luna"),
 ])
 def test_without_a_catalog_a_codex_gpt_model_follows_openais_ids(tmp_path, said, model_id):
     model, warnings = models.resolve("codex", said, None, tmp_path)

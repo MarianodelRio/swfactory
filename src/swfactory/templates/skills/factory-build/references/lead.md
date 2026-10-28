@@ -82,3 +82,12 @@ Your role: `roles/lead.md`. You own the task end to end, inside its workspace.
    pushes later commits to the same PR. If `gh` is missing or the push is rejected, report it: the
    branch stays intact and the PR (or merge) is left to the person. Never merge any other way,
    never force push, never delete branches or workspaces yourself.
+4. If a PR was opened, check it can still be merged: `gh pr view <number> --json mergeable,mergeStateStatus`
+   (the number is `pull_request.number` from the publish answer). If `mergeable` is `UNKNOWN`,
+   GitHub is still computing it: wait a few seconds and check again. If it is `CONFLICTING`,
+   `git fetch origin <base>` and `git merge origin/<base>` in the workspace (never rebase: it would
+   need a force push), resolve the conflicts yourself, commit, re-run
+   `swfactory task verify <task> --json` (merging the base can change behavior), then
+   `swfactory task publish <task> --json` again to push the resolved branch. If the merge itself
+   has conflicts you cannot resolve with what the task knows, stop and tell the person instead of
+   guessing at the base's intent.
