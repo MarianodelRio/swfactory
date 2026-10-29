@@ -491,6 +491,15 @@ count from what needs a judgment call, and proposes evidence-cited ways to reduc
 quota spend — never editing this project's code, skills, docs or task state. Each proposal becomes
 a `design_<slug>.md` only after you confirm it.
 
+`swfactory improve extract`'s evidence is deliberately conservative about what it claims to know:
+a Claude session/subagent file without a `cost-state` entry never gets silently folded into another
+file's dollar total — its token usage is reported separately under `tokens.usage_only_tokens`
+(with `tokens.files_with_cost_state` / `tokens.files_usage_only` counts), and a coverage gap names
+it. A Codex tool call whose arguments don't match a recognized shape (a `command` field, or the
+`tools.exec_command({cmd: ...})` script-call form some `codex-cli` versions emit) is never assumed
+to have succeeded: it's counted under `unsupported_calls` by tool name, with a coverage gap, and
+left out of `repeated_failing_commands` rather than counted as zero failures.
+
 ## 8. Task states
 
 | State | Meaning | What to do |

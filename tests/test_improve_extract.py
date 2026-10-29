@@ -146,6 +146,31 @@ def test_cost_state_takes_the_last_running_total_not_a_sum(tmp_path):
     assert tokens["models"]["claude-x"]["costUSD"] == pytest.approx(25.0)
 
 
+def test_mixed_cost_coverage_reports_usage_only_files_separately(tmp_path):
+    """Some Claude session/subagent files carry a cost-state entry and some don't; the ones without
+    one must not be silently dropped from the result just because another file had one."""
+    store = TaskStore(tmp_path / "state")
+    workspace = tmp_path / "work" / "repo"
+    seed(store, TASK, workspace)
+    project = claude_project_dir(tmp_path / "home", workspace)
+    write(project / "session-1.jsonl", "\n".join([
+        tool_use_assistant("t1", "Read"),
+        cost_state(cost_usd=1.0),
+    ]))
+    write(project / "sess-1" / "subagents" / "agent-a.jsonl",
+          tool_use_assistant("s1", "Read", usage={"input_tokens": 9, "output_tokens": 1}))
+
+    [task] = improve.extract([TASK], store, tmp_path / "home")["tasks"]
+    assert task["coverage"] == "partial"
+    assert any("usage_only_tokens" in gap for gap in task["coverage_gaps"])
+    tokens = task["evidence"]["claude"]["tokens"]
+    assert tokens["cost_usd"] == pytest.approx(1.0)
+    assert tokens["files_with_cost_state"] == 1
+    assert tokens["files_usage_only"] == 1
+    assert tokens["usage_only_tokens"]["input"] == 9
+    assert tokens["usage_only_tokens"]["output"] == 1
+
+
 def test_malformed_orca_id_is_a_coverage_gap_not_a_crash(tmp_path):
     store = TaskStore(tmp_path / "state")
 
@@ -216,6 +241,60 @@ def test_codex_sessions_matched_by_cwd_count_tool_calls_and_failures(tmp_path):
     assert codex["tool_calls"] == {"shell": 1}
     [failing] = codex["repeated_failing_commands"]
     assert failing == {"command": "pytest", "count": 1, "failures": 1}
+
+
+def codex_rollout_lines(cwd, *calls):
+    meta = json.dumps({"payload": {"id": "sess-1", "cwd": str(cwd), "source": "cli"}})
+    return "\n".join([meta, *calls])
+
+
+def js_exec_call(call_id, cmd):
+    script = f'const r = await tools.exec_command({{cmd: "{cmd}", timeout_ms: 1000}});\nreturn r;'
+    return json.dumps({"payload": {"type": "custom_tool_call", "name": "exec", "call_id": call_id,
+                                   "input": script}})
+
+
+def js_exec_output(call_id, exit_code=0):
+    return json.dumps({"payload": {"type": "custom_tool_call_output", "call_id": call_id, "exit_code": exit_code}})
+
+
+def test_codex_js_exec_command_is_parsed_and_masked(tmp_path):
+    store = TaskStore(tmp_path / "state")
+    workspace = tmp_path / "work" / "repo"
+    seed(store, TASK, workspace, agent="codex")
+    home = tmp_path / "home"
+    write(home / ".codex/sessions/2026/10/18/rollout-sess-1.jsonl", codex_rollout_lines(
+        workspace,
+        js_exec_call("c1", "curl -H 'Authorization: Bearer sk-abcdefghijklmnopqrstuvwxyz'"),
+        js_exec_output("c1", exit_code=1),
+    ))
+
+    [task] = improve.extract([TASK], store, home)["tasks"]
+    codex = task["evidence"]["codex"]
+    assert codex["tool_calls"] == {"exec": 1}
+    assert codex["unsupported_calls"] == {}
+    [failing] = codex["repeated_failing_commands"]
+    assert failing["count"] == 1 and failing["failures"] == 1
+    assert "sk-abcdefghijklmnopqrstuvwxyz" not in failing["command"]
+    assert "curl" in failing["command"]
+
+
+def test_codex_unrecognized_call_format_is_reported_not_silently_empty(tmp_path):
+    store = TaskStore(tmp_path / "state")
+    workspace = tmp_path / "work" / "repo"
+    seed(store, TASK, workspace, agent="codex")
+    home = tmp_path / "home"
+    unrecognized = json.dumps({"payload": {"type": "custom_tool_call", "name": "exec", "call_id": "c2",
+                                           "input": "await tools.run_something_else({foo: 1})"}})
+    write(home / ".codex/sessions/2026/10/18/rollout-sess-1.jsonl",
+          codex_rollout_lines(workspace, unrecognized, js_exec_output("c2", exit_code=1)))
+
+    [task] = improve.extract([TASK], store, home)["tasks"]
+    codex = task["evidence"]["codex"]
+    assert codex["tool_calls"] == {"exec": 1}
+    assert codex["unsupported_calls"] == {"exec": 1}
+    assert codex["repeated_failing_commands"] == []  # not a silent "zero failures" — see the gap below
+    assert any("unsupported_calls" in gap for gap in task["coverage_gaps"])
 
 
 def test_codex_missing_token_fields_is_reported_as_a_gap(tmp_path):

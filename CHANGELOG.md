@@ -9,6 +9,19 @@ output, the files under `.factory/` (`schema_version`), and the skills' names an
 
 ## [Unreleased]
 
+## [3.1.0] - 2026-10-29
+
+### Fixed
+- `swfactory improve extract`: a Claude session/subagent file with no `cost-state` entry is no
+  longer silently excluded from the Claude cost total just because another file for the same task
+  had one — its usage is now reported separately under `tokens.usage_only_tokens`, with
+  `tokens.files_with_cost_state` / `tokens.files_usage_only` counts and a coverage gap naming the
+  split. A Codex tool call whose arguments aren't a recognized `command` shape (including the
+  `tools.exec_command({cmd: ...})` script-call form some `codex-cli` versions emit) is no longer
+  dropped from the count with an implied "no failures" — it's now parsed when recognized, and
+  otherwise counted under a new `unsupported_calls` field with a coverage gap, instead of being
+  silently absent from `repeated_failing_commands`.
+
 ## [3.0.0] - 2026-10-28
 
 Run `/factory-init` in each repository after upgrading: it installs the new `/factory-improve`
@@ -185,7 +198,8 @@ First stable release, published as `swfactory` on PyPI.
 
 Initial development version (not published to a package registry).
 
-[Unreleased]: https://github.com/MarianodelRio/swfactory/compare/v3.0.0...HEAD
+[Unreleased]: https://github.com/MarianodelRio/swfactory/compare/v3.1.0...HEAD
+[3.1.0]: https://github.com/MarianodelRio/swfactory/compare/v3.0.0...v3.1.0
 [3.0.0]: https://github.com/MarianodelRio/swfactory/compare/v2.1.0...v3.0.0
 [2.1.0]: https://github.com/MarianodelRio/swfactory/compare/v2.0.0...v2.1.0
 [2.0.0]: https://github.com/MarianodelRio/swfactory/compare/v1.1.0...v2.0.0
