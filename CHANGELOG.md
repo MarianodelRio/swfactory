@@ -9,6 +9,10 @@ output, the files under `.factory/` (`schema_version`), and the skills' names an
 
 ## [Unreleased]
 
+### Fixed
+- The board honors an authenticated stop even if the client disconnects while its response is
+  being sent. The CLI reads that response completely before closing the connection.
+
 ### Changed
 - New managed conformance reviews require a proof plan and complete requirement coverage against
   their reserved design, verification definitions and evidence. Bare legacy conformance passes

@@ -284,8 +284,11 @@ def serve(main_checkout: Path, state_dir: Path, port: int, idle_minutes: float, 
                 return
             if self.path != "/stop" or not secrets.compare_digest(self.headers.get(TOKEN_HEADER, ""), token):
                 return self._send(403, "text/plain", b"forbidden")
-            self._send(200, "application/json", b'{"stopping": true}')
-            stopping.set()
+            try:
+                self._send(200, "application/json", b'{"stopping": true}')
+            finally:
+                # An authenticated stop remains valid if the client disconnects mid-response.
+                stopping.set()
 
         def _send(self, status: int, kind: str, body: bytes) -> None:
             self.send_response(status)
@@ -419,8 +422,8 @@ def stop(main_checkout: Path, state_dir: Path) -> dict[str, Any]:
     request = urllib.request.Request(f"http://127.0.0.1:{int(current['port'])}/stop", data=b"", method="POST",
                                      headers={TOKEN_HEADER: str(current.get("token", ""))})
     try:
-        with urllib.request.urlopen(request, timeout=5):
-            pass
+        with urllib.request.urlopen(request, timeout=5) as reply:
+            reply.read()  # let the server finish its response before closing the connection
     except OSError as exc:
         raise FactoryError("board_not_stopped", f"the board did not accept the stop: {exc}", EXIT_ERROR) from exc
     deadline = time.monotonic() + 10

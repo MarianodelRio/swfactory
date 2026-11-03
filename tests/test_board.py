@@ -205,11 +205,55 @@ def test_start_status_open_and_stop_a_background_board(working, home, fake_orca,
         assert tab[tab.index("--worktree") + 1] == f"path:{working.root}"
         assert cli(capsys, "board", "status")[1]["data"]["running"] is True
     finally:
-        _, stopped = cli(capsys, "board", "stop")
+        code, stopped = cli(capsys, "board", "stop")
+    assert code == 0, (stopped, board_log(working))
     assert stopped["data"]["stopped"] is True
     assert cli(capsys, "board", "status")[1]["data"] == {"running": False}
     with pytest.raises(OSError):
         get(started["url"] + "health")
+
+
+def test_authenticated_stop_survives_client_disconnect(working, home, monkeypatch):
+    original_server = board._Server
+    disconnect = [True]
+
+    def server_with_disconnecting_client(address, handler):
+        send = handler._send
+
+        def interrupted_send(self, status, kind, body):
+            if self.path == "/stop" and disconnect[0]:
+                disconnect[0] = False
+                raise BrokenPipeError("client disconnected before receiving the response")
+            return send(self, status, kind, body)
+
+        handler._send = interrupted_send
+        server = original_server(address, handler)
+        server.handle_error = lambda *_: None  # the simulated disconnect is intentional
+        return server
+
+    monkeypatch.setattr(board, "_Server", server_with_disconnecting_client)
+    state = working.root / ".factory/state"
+    thread = threading.Thread(target=board.serve, args=(working.root, state, 0, 60, home), daemon=True)
+    thread.start()
+    info = {}
+    try:
+        deadline = time.monotonic() + 10
+        while not info and time.monotonic() < deadline:
+            info = board._read_info(state)
+            time.sleep(0.02)
+        assert info, "board did not start"
+        request = urllib.request.Request(info["url"] + "stop", data=b"", method="POST",
+                                         headers={board.TOKEN_HEADER: info["token"]})
+        with pytest.raises(OSError):
+            urllib.request.urlopen(request, timeout=5)
+        thread.join(timeout=5)
+        assert not thread.is_alive(), "an authenticated request must stop even if sending its reply fails"
+    finally:
+        if thread.is_alive() and info:
+            disconnect[0] = False
+            with urllib.request.urlopen(request, timeout=5) as reply:
+                reply.read()
+            thread.join(timeout=5)
 
 
 def test_two_starts_at_once_give_one_board(working, home, capsys):
