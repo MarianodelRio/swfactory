@@ -572,7 +572,8 @@ def _config_text(root: Path, report: dict[str, Any], tracked: dict[str, str]) ->
             f"schema_version = {d['schema_version']}", "",
             "[orca]", f"min_version = {json.dumps(d['orca']['min_version'])}", "",
             "[checks]", *[f"{k} = {json.dumps(v)}" for k, v in checks.items()], "",
-            "[review]", *[f"{k} = {json.dumps(v)}" for k, v in d["review"].items()], "",
+            "[review]", *[f"{'max_failed_rounds' if k == 'max_rounds' else k} = {json.dumps(v)}"
+                           for k, v in d["review"].items()], "",
             "[git]", *[f"{k} = {json.dumps(v)}" for k, v in d["git"].items()], "",
             "[language]", f"artifacts = {json.dumps(d['language']['artifacts'])}", "",
             "[board]", *[f"{k} = {json.dumps(v)}" for k, v in d["board"].items()], "",

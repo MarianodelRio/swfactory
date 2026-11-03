@@ -28,8 +28,12 @@ def reserve(ctx, kind="quality", agent=None):
 
 def report(tmp_path, run, verdict="pass", findings=()):
     path = tmp_path / f"{run['review_id']}.json"
-    path.write_text(json.dumps({"type": run["type"], "commit": run["run"]["commit"],
-                                "verdict": verdict, "findings": list(findings)}))
+    data = {"type": run["type"], "commit": run["run"]["commit"],
+            "verdict": verdict, "findings": list(findings)}
+    if verdict == "fail" or any(f["severity"] in ("major", "blocker") for f in findings):
+        data["diagnosis"] = {"cause": "undetermined", "explanation": "fixture does not establish causality",
+                             "evidence": []}
+    path.write_text(json.dumps(data))
     return path
 
 
@@ -67,10 +71,13 @@ def test_ambiguous_launch_is_retained_and_not_repeated(ctx, monkeypatch):
 
 
 def test_conformance_waits_for_current_quality_pass(ctx, tmp_path):
+    from review_support import plan
+
     with pytest.raises(FactoryError, match="quality"):
         reserve(ctx, "conformance")
     quality = reserve(ctx)
     reviews.complete(TASK, quality["review_id"], report(tmp_path, quality), ctx)
+    plan(ctx, TASK, tmp_path / "plan.json")
     assert reserve(ctx, "conformance")["launched"]
 
 

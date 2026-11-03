@@ -1,4 +1,4 @@
-<!-- factory-template: design/design.md@4 -->
+<!-- factory-template: design/design.md@5 -->
 <!-- Replace CHG-N with the id reserved by `swfactory design register` (e.g. CHG-12; tasks CHG-12.1, CHG-12.2). Keep the design proportional
      to the change; delete these comments. Everything here is in English. -->
 # CHG-N — Title
@@ -16,6 +16,11 @@ What changes. In scope / out of scope.
 ## Approach
 Chosen solution and alternatives considered, with trade-offs.
 Decisions to record as ADR. Existing decisions respected or superseded.
+
+## Constraints
+<!-- Optional change-wide obligations applying to every task.
+Example bullet: - C-01: The public API exposes exactly the six actions listed in the approach.
+Use ACs for task-specific behavioral obligations. Remove this section when unnecessary. -->
 
 ## Implementation notes
 Files and modules to touch, patterns to follow (with paths),

@@ -132,7 +132,10 @@ def claimed(project, home, capsys):  # noqa: F811
 
 
 def test_lead_and_reviewer_models_are_recorded_and_used(claimed, fake_orca, capsys, tmp_path):
+    from review_support import plan
     from test_review import review_file
+
+    from swfactory import tasks
 
     code, out = cli(capsys, "task", "launch", TASK, "--agent", "claude", "--model", "opus 5.5", "--effort", "high",
                     "--reviewer", "codex", "--reviewer-model", "sol 6.1")
@@ -144,6 +147,7 @@ def test_lead_and_reviewer_models_are_recorded_and_used(claimed, fake_orca, caps
     assert (attempt["model"], attempt["reviewer"], attempt["reviewer_model"]) == ("opus", "codex", "sol-6.1")
     TaskStore(claimed.root / ".factory/state").update_task(TASK, lambda s: {**s, "state": "in_review"}, "x")
     assert cli(capsys, "task", "review", TASK, "--record", review_file(tmp_path))[0] == 0
+    plan(tasks.Context(claimed.root, TaskStore(claimed.root / ".factory/state")), TASK, tmp_path / "plan.json")
     code, out = cli(capsys, "task", "review", TASK, "--type", "conformance")
     assert code == 0, out
     review = orca_calls(fake_orca, "agent launch")[-1]

@@ -116,9 +116,10 @@ def test_invalid_pr_on_done(tmp_path):
 
 
 @pytest.mark.parametrize("value", ["0", "-1", '"2"', "1.5", "true"])
-def test_invalid_max_rounds(tmp_path, value):
-    message = invalid(write(tmp_path, f"[review]\nmax_rounds = {value}\n"))
-    assert "review.max_rounds" in message
+@pytest.mark.parametrize("key", ["max_rounds", "max_failed_rounds"])
+def test_invalid_review_round_limit(tmp_path, value, key):
+    message = invalid(write(tmp_path, f"[review]\n{key} = {value}\n"))
+    assert f"review.{key}" in message
 
 
 def test_invalid_check_command(tmp_path):

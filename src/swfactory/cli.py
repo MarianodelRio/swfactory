@@ -243,6 +243,11 @@ def task_verify(args: argparse.Namespace) -> Result:
     return tasks.verify(args.task, task_context(), args.plan)
 
 
+def task_proof_plan(args: argparse.Namespace) -> Result:
+    return tasks.proof_plan(args.task, Path(args.file).resolve(),
+                            [Path(p).resolve() for p in args.evidence], task_context()), []
+
+
 # Command name ("task launch") -> handler.
 HANDLERS: dict[str, Handler] = {
     "design register": design_register,
@@ -258,6 +263,7 @@ HANDLERS: dict[str, Handler] = {
     "task block": task_block,
     "task unblock": task_unblock,
     "task verify": task_verify,
+    "task proof-plan": task_proof_plan,
     "task submit": task_submit,
     "task review": task_review,
     "task review-complete": review_complete,
@@ -376,6 +382,11 @@ def build_parser() -> Parser:
     review.add_argument("--agent")
     review.add_argument("--model", help="default: the reviewer model chosen at launch")
     review.add_argument("--effort")
+
+    proof_cmd = command(task_cmds, "proof-plan", "task proof-plan", "record requirement scenarios and assertions")
+    proof_cmd.add_argument("task", type=task_id)
+    proof_cmd.add_argument("--file", required=True, help="proof plan JSON, keyed by AC-NN and C-NN")
+    proof_cmd.add_argument("--evidence", action="append", default=[], help="attach focused UTF-8 test evidence")
 
     for name, handler in (("review-complete", "deliver a reserved review result"),
                           ("review-wait", "wait for a review result without reading its terminal"),

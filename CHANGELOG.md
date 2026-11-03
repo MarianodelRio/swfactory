@@ -9,7 +9,25 @@ output, the files under `.factory/` (`schema_version`), and the skills' names an
 
 ## [Unreleased]
 
+### Changed
+- New managed conformance reviews require a proof plan and complete requirement coverage against
+  their reserved design, verification definitions and evidence. Bare legacy conformance passes
+  remain readable but must be replaced to satisfy closing gates.
+- Review limits count applicable failures per type since the last authorized continuation;
+  passes, historical results and duplicate deliveries do not spend the allowance. Findings keep
+  stable ids, explicit resolutions and evidence-backed diagnoses. `review.max_failed_rounds`
+  replaces `max_rounds` (accepted as a fallback alias with the new semantics).
+- Project memory is prepared before final reviews. A shared configurable memory path policy
+  handles package documentation, executable documentation and review/check freshness separately.
+- Problem 4 receives a prompt-level mitigation: lead, planner and reviewer templates ask agents
+  to consider related cases when correcting a defect. This is guidance, not a code-enforced
+  guarantee of correction completeness.
+
 ### Added
+- `swfactory task proof-plan <task> --file <plan.json> [--evidence <text-file>]` records scenarios,
+  assertions and distinguishing tests using existing verification executions. Optional change-wide
+  `C-NN` obligations belong in the approved design's `## Constraints` section.
+- Review diagnosis and finding status in task views; the board shows the failure explanation.
 - Explicit shared check/task-verification references for acceptance criteria, inspectable
   execution plans and one evidence file per execution. Changed definitions invalidate old
   evidence. Legacy commands stay independent and repeated verify calls always run afresh.

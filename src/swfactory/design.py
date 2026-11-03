@@ -129,6 +129,12 @@ def parse_design(design_md: str, change_id: str, known_tasks: set[str],
         errors.append("missing section '## Acceptance criteria'")
     else:
         criteria = [m.group(1) for line in criteria_body.splitlines() if (m := AC_LINE.match(line))]
+        if len(set(criteria)) != len(criteria):
+            errors.append("acceptance criterion ids must be unique")
+    constraints = section(text, "Constraints") or ""
+    constraint_ids = re.findall(r"^\s*-\s*(C-\d{2,}):\s*\S", constraints, re.MULTILINE)
+    if len(set(constraint_ids)) != len(constraint_ids):
+        errors.append("constraint ids must be unique")
 
     tasks = _task_block(text, errors)
     if tasks is not None:

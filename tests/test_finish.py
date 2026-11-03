@@ -35,6 +35,10 @@ def ready_to_finish(repo, fake_orca, monkeypatch, capsys, tmp_path):
     assert main(["task", "submit", TASK]) == 0
     (tmp_path / "q.json").write_text(json.dumps(quality()))
     assert main(["task", "review", TASK, "--record", str(tmp_path / "q.json")]) == 0
+    from review_support import plan
+
+    from swfactory.tasks import Context
+    plan(Context(repo.root, store), TASK, tmp_path / "plan.json")
     capsys.readouterr()
     return {"repo": repo, "store": store, "workspace": workspace}
 
@@ -65,6 +69,36 @@ def test_finish_happy_path(ready_to_finish, fake_orca, capsys):
     assert card[card.index("--comment") + 1] == "2/2 AC verified · to merge"
 
 
+@pytest.mark.parametrize("key", ["paths", "behavior_paths"])
+@pytest.mark.parametrize("policy_changed", [False, True])
+def test_review_and_finish_agree_on_memory_policy_changes(ready_to_finish, tmp_path, key, policy_changed):
+    from swfactory import reviews, tasks
+    from swfactory.output import FactoryError
+
+    repo, store = ready_to_finish["repo"], ready_to_finish["store"]
+    ctx = tasks.Context(repo.root, store)
+    run = reviews.start(TASK, "quality", None, ctx)[0]
+    report = tmp_path / "managed-review.json"
+    report.write_text(json.dumps({"type": "quality", "commit": run["run"]["commit"],
+                                  "verdict": "pass", "findings": []}))
+    reviews.complete(TASK, run["review_id"], report, ctx)
+    task = tasks.catalog(ctx)[TASK]
+    assert reviews.gates(task, store.read_task(TASK), tasks._config(ctx), ctx) == {"quality": "passed"}
+
+    if policy_changed:
+        config_path = repo.root / ".factory/config.toml"
+        config_path.write_text(config_path.read_text() + f'\n[memory]\n{key} = ["harness/docs/*.md"]\n')
+        assert reviews.gates(task, store.read_task(TASK), tasks._config(ctx), ctx) == {"quality": "stale"}
+        with pytest.raises(FactoryError) as error:
+            tasks.finish(TASK, "none", ctx)
+        assert error.value.code == "gates_not_met"
+        assert "memory/freshness policy changed: verify again" in error.value.details
+        assert "the quality review does not cover the last commit with code or current design" in error.value.details
+        assert store.read_task(TASK)["state"] == "in_review"
+    else:
+        assert tasks.finish(TASK, "none", ctx)[0]["state"] == "to_merge"
+
+
 def test_memory_none_is_accepted(ready_to_finish, capsys):
     code, _ = finish(capsys, memory="none")
     assert code == 0
@@ -84,6 +118,20 @@ def test_gate_ac_not_verified(ready_to_finish, capsys):
     store.update_task(TASK, lambda s: {**s, "acceptance": {**s["acceptance"],
                                                           "AC-02": {"status": "pending", "evidence": None}}}, "x")
     assert any("AC-02" in d for d in failing_gates(capsys))
+
+
+def test_new_nontrivial_task_cannot_finish_without_proof_plan(ready_to_finish, capsys):
+    store = ready_to_finish["store"]
+    store.update_task(TASK, lambda s: {**s, "proof_plan": None}, "test")
+    assert any("proof-plan" in d for d in failing_gates(capsys))
+
+
+def test_manual_observation_must_be_repeated_after_code_changes(ready_to_finish, capsys):
+    repo, workspace = ready_to_finish["repo"], ready_to_finish["workspace"]
+    repo.commit("src/bookings/model.py", "RULE = 'monthly'\n", "change behavior", cwd=workspace)
+    assert main(["task", "verify", TASK]) == 0
+    capsys.readouterr()
+    assert any("AC-02" in d and "current committed behavior" in d for d in failing_gates(capsys))
 
 
 def test_gate_checks_failed(ready_to_finish, capsys):
@@ -138,6 +186,9 @@ def test_scope_warning_is_stored_but_does_not_block(ready_to_finish, capsys):
     repo.commit("src/payments/hack.py", "x = 1\n", "Out of scope", cwd=workspace)
     store = ready_to_finish["store"]
     assert main(["task", "verify", TASK]) == 0
+    evidence = workspace.parent / "manual-again.txt"
+    evidence.write_text("calendar still shows the required occurrences after the code change")
+    assert main(["task", "verify", TASK, "--manual", "AC-02", "--evidence", str(evidence)]) == 0
     capsys.readouterr()
     (workspace.parent / "q2.json").write_text(json.dumps(quality()))
     assert main(["task", "review", TASK, "--record", str(workspace.parent / "q2.json")]) == 0

@@ -55,6 +55,15 @@ def load_config(path: Path) -> dict[str, Any]:
         else:
             config[key] = value
 
+    memory = config.get("memory", {})
+    if not isinstance(memory, dict):
+        raise _invalid("memory must be a table")
+    for name in ("paths", "behavior_paths"):
+        value = memory.get(name, [])
+        if not isinstance(value, list) or not all(isinstance(p, str) and p.strip() and not p.startswith("/")
+                                                and ".." not in p.split("/") for p in value):
+            raise _invalid(f"memory.{name} must contain relative repository path globs")
+
     _validate(config)
     return config
 
@@ -70,9 +79,12 @@ def _validate(config: dict[str, Any]) -> None:
             raise _invalid(f"checks.{name} must be a string command, got {command!r}")
     for key in ("quality", "conformance"):
         _choice(f"review.{key}", config["review"][key], REVIEW_MODES)
-    rounds = config["review"]["max_rounds"]
-    if type(rounds) is not int or rounds < 1:
-        raise _invalid(f"review.max_rounds must be a positive integer, got {rounds!r}")
+    # Validate the explicit limit and its legacy alias through the same rule.
+    for key in ("max_rounds", "max_failed_rounds"):
+        if key in config["review"]:
+            rounds = config["review"][key]
+            if type(rounds) is not int or rounds < 1:
+                raise _invalid(f"review.{key} must be a positive integer, got {rounds!r}")
     _choice("git.pr_on_done", config["git"]["pr_on_done"], PR_MODES)
     _choice("git.integrate", config["git"]["integrate"], INTEGRATE_MODES)
     _choice("git.cleanup", config["git"]["cleanup"], CLEANUP_MODES)

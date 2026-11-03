@@ -558,7 +558,9 @@ shared by every workspace of the clone, because it lives in the main checkout.
 |---|---|---|
 | `[checks]` `test`, `lint`, `typecheck`, `build` | commands | Run by `verify` in the task's workspace; at least one is required to finish a task |
 | `review.quality`, `review.conformance` | `auto`, `always`, `never` | `auto` follows each task's `review` field; `always` / `never` force it for every task |
-| `review.max_rounds` | `2` | Rounds without a pass before a task is blocked |
+| `review.max_failed_rounds` | `2` | Applicable failures per review type since the last authorized continuation; `max_rounds` remains a fallback alias |
+| `memory.paths` | root `docs/` Markdown/reStructuredText | Allowed prose memory destinations; add package docs explicitly |
+| `memory.behavior_paths` | `[]` | Documentation files whose changes must also invalidate behavioral checks |
 | `git.pr_on_done` | `offer`, `always`, `never` | Whether the lead offers, always does, or never publishes a finished task |
 | `git.integrate` | `pr`, `merge` | Default integration of a task: a PR you merge, or a merge right away (a task's `integrate` wins) |
 | `git.cleanup` | `ask`, `always`, `never` | After a merge: offer, always do, or never remove the workspace and local branch |
@@ -676,6 +678,124 @@ or scheduled wakeups. A timeout is still pending. Use `task review-cancel` with 
 abandon a launch explicitly; it does not terminate the agent. Late results remain in history.
 `task show`, status and the board expose `review_status`, including stale passes. Finish uses
 that same freshness check. Existing `task review --record` remains for historical/manual reports.
+Imports cannot replace managed results. A bare conformance pass cannot satisfy the new coverage
+contract. Existing reservations retain their delivery format, but old conformance passes need a
+new covered review before closing. New reports declare their version in the reserved request.
+
+## Related cases when correcting defects (problem 4)
+
+The lead, planner and quality-reviewer prompts ask agents to consider the underlying guarantee,
+related operations, boundaries and failure/retry paths when correcting a defect. This is a
+prompt-level mitigation only: Factory does not enforce completeness of these investigations or
+guarantee that every related case was tested. The CLI checks described below enforce report
+structure, coverage and freshness; they cannot establish the completeness of an agent's reasoning.
+
+## Requirement proof and conformance
+
+Before implementing, record a compact proof plan with
+`swfactory task proof-plan CHG-1.1 --file /tmp/proof.json --json`. It is keyed by the task's ACs
+and any change-wide constraints, each identifying code, scenario, expected assertion, verification
+execution and the incorrect behavior it distinguishes. For example:
+
+```json
+{
+  "AC-01": {
+    "code": "harness/execute.py:run",
+    "scenario": "the manifest changes after preview and before execution",
+    "assertion": "execution refuses and Core is not invoked",
+    "verification": "verification:execution_guard",
+    "discrimination": "a preview-only guard lets this execution through"
+  }
+}
+```
+
+Execution ids come from `task verify --plan`: `check:<name>`, `verification:<name>` or `ac:AC-NN`.
+Use `manual` or `inspection` when appropriate. Re-record the plan when its approach or definitions
+change. Add `--evidence /tmp/focused-test.txt` to attach UTF-8 output showing an important test's
+expected failure on old behavior or a targeted fault, and success after correction. Factory masks
+secrets and preserves this evidence. A broken import or fixture is not proof of the requirement.
+Use this same plan in reviews; no extra full-suite execution is implied.
+
+Newly claimed nontrivial tasks require a current proof plan to finish, including tasks without
+conformance review. Already running tasks retain their previous proof-plan closing contract,
+but a new conformance request always requires a plan. Trivial tasks do not gain a mandatory
+planning step. Manual evidence is attached to a commit too: after behavioral changes, repeat
+the observation. Old manual evidence without commit metadata must be attached again before closing.
+
+Binding obligations should be explicit ACs. Optional `## Constraints` bullets such as
+`- C-01: Expose exactly the six public actions listed above.` apply to every task in the change.
+Task-specific obligations belong in its ACs. The design critic checks for binding requirements
+hidden only in explanatory prose. All design changes still require explicit reapproval.
+
+New conformance requests require a current proof plan. Requests persist the approved design text,
+its digest, requirement list, proof plan, verification-definition digest and evidence references.
+Reviewers use these reserved sources, and deliver the usual report plus:
+
+```json
+{
+  "coverage": {
+    "AC-01": {
+      "status": "satisfied",
+      "implementation": "harness/execute.py:run",
+      "assertion": "test_manifest_changed asserts Core was not called",
+      "reason": "the assertion exercises the interval after preview",
+      "evidence": ["evidence/CHG-1.1/<run>/execution-1.txt"]
+    }
+  },
+  "deviations": []
+}
+```
+
+Coverage must contain exactly every reserved obligation. Status is `satisfied`, `violated` or
+`unverified`. Each satisfied AC cites its bound, passing acceptance evidence; shared evidence is
+allowed but its assertions must establish each claim. A constraint assessed through code inspection
+can cite the reserved `git:<target sha>` reference. A conformance pass cannot contain a deviation,
+violation or unverified obligation. Changed definitions, policy or proof context invalidate the
+review; missing reserved evidence also prevents a current pass. Factory enforces report completeness,
+not the truth of the reviewer's technical reasoning.
+
+## Review failures and continuation
+
+Reports retain lifetime round numbers separately from the failure allowance. Applicable failures
+count per type within a continuation period; passes, delivery retries, historical reports,
+cancelled requests and launch errors do not spend it. `max_failed_rounds` wins over the old
+`max_rounds` alias; the alias now has these same failure-counting semantics. New init configs use
+the explicit name. An authorized `task unblock` after a review-limit block starts a new period,
+preserving reports and findings. Older-period results remain historical.
+
+New findings receive stable ids. The next reviewer sees `previous_findings` in the request and
+returns `finding_status`, mapping each outstanding major/blocker id to `status` (`resolved`,
+`unresolved`, `partial`, `disputed`) and an evidence-backed `reason`. Assess old findings rather
+than introducing them under new ids. A pass requires prior major/blocker findings to be resolved.
+
+Failed version-2 reviews also include `diagnosis` with `cause`, `explanation` and `evidence`
+(a list of references). Causes are `omitted_requirement`, `incomplete_fix`, `regression`,
+`insufficient_evidence`, `unclear_contract`, `review_workflow` or `undetermined`. A causal claim
+requires evidence; use `undetermined` and explain the missing information otherwise. Discovery
+time alone does not establish introduction time or model incapacity. Task views and the board
+show the diagnosis; `/factory-improve` distinguishes applicable failures and historical results.
+
+## Memory paths and final review order
+
+Prepare and commit memory before final verification, quality and conformance reviews. Configure
+package prose destinations and behavioral documentation explicitly, for example:
+
+```toml
+[memory]
+paths = ["docs/*.md", "docs/**/*.md", "harness/docs/*.md"]
+behavior_paths = ["harness/docs/executable-guide.md"]
+```
+
+`paths` replaces the default prose destinations. Only `.md`, `.rst` and `.txt` files qualify as
+memory; scripts and schemas remain behavioral even inside a documentation directory. Allowed
+memory is exempt from product scope warnings. Ordinary prose does not invalidate behavioral
+checks or quality, but changes after conformance require fresh conformance. `behavior_paths`
+overrides the prose exemption for check freshness. Root instruction files remain behavioral.
+The approved design and resolved verification commands have separate freshness checks. Changing
+the memory policy itself invalidates verification and new managed reviews.
+
+If a lesson arises after reviews, commit it and inspect `task show` for which reviews became
+stale. Keep existing evidence when its inputs remain valid; a new `verify` still executes afresh.
 
 ## Measurement and session attribution
 

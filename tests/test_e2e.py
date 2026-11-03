@@ -93,8 +93,14 @@ def workspace_of(repo, task):
 def record_review(repo, capsys, task, kind, tmp_path, run_id=None):
     head = git("rev-parse", "HEAD", cwd=workspace_of(repo, task))
     report = tmp_path / f"{kind}.json"
-    report.write_text(json.dumps({"type": kind, "commit": head, "verdict": "pass", "findings": [
-        {"severity": "minor", "file": "src/bookings.py", "line": 1, "problem": "terse name", "fix": "rename"}]}))
+    data = {"type": kind, "commit": head, "verdict": "pass", "findings": [
+        {"severity": "minor", "file": "src/bookings.py", "line": 1, "problem": "terse name", "fix": "rename"}]}
+    if kind == "conformance" and run_id:
+        from review_support import coverage
+        record = json.loads((repo.root / f".factory/state/{task}.json").read_text())
+        run = next(r for r in record["review_runs"] if r["id"] == run_id)
+        data.update(coverage=coverage(run), deviations=[])
+    report.write_text(json.dumps(data))
     if run_id:
         return ok(capsys, "task", "review-complete", task, "--review", run_id, "--file", str(report))
     return ok(capsys, "task", "review", task, "--record", str(report))
@@ -120,6 +126,11 @@ def test_full_flow_from_init_to_published_pr(initialized, fake_gh, capsys, tmp_p
     assert ok(capsys, "task", "submit", task)["reviews"] == ["quality", "conformance"]
     quality = ok(capsys, "task", "review", task, "--type", "quality")
     record_review(repo, capsys, task, "quality", tmp_path, quality["review_id"])
+    from review_support import plan
+
+    from swfactory import tasks
+    from swfactory.state import TaskStore
+    plan(tasks.Context(repo.root, TaskStore(repo.root / ".factory/state")), task, tmp_path / "proof.json")
     conformance = ok(capsys, "task", "review", task, "--type", "conformance")
     assert conformance["launched"] is True
     record_review(repo, capsys, task, "conformance", tmp_path, conformance["review_id"])

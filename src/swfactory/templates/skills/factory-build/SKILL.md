@@ -2,7 +2,7 @@
 name: factory-build
 description: Build approved Software Factory tasks (CHG-N.M), one or several at once. From the main checkout it claims each task, creates its Orca workspace and launches the lead agent there; inside the task's workspace it acts as the lead agent (plan, tests, code, checkpoints, verify, reviews, memory, finish, publish). Use for "/factory-build CHG-12.1 con codex, revisa claude", "/factory-build 12.1 12.2", "/factory-build CHG-12" (its ready tasks), "lanza todas las ready", or when launched with the brief "/factory-build <task> [--reviewer <agent>]".
 ---
-<!-- factory-template: skills/factory-build@2 -->
+<!-- factory-template: skills/factory-build@3 -->
 
 # /factory-build
 

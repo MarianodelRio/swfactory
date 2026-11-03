@@ -83,6 +83,9 @@ def test_pause_before_submit_blocks_instead(working, store, capsys):
 
 
 def test_conformance_review_launches_an_orca_agent(working, store, fake_orca, capsys, tmp_path):
+    from review_support import plan
+
+    plan(tasks.Context(working.root, store), TASK, tmp_path / "plan.json")
     cli(capsys, "task", "submit", TASK)
     cli(capsys, "task", "review", TASK, "--record", review_file(tmp_path))
     code, out = cli(capsys, "task", "review", TASK, "--type", "conformance")
@@ -123,7 +126,7 @@ def test_record_pass_with_minor_findings(working, store, tmp_path, capsys):
     assert review["type"] == "quality"
     assert review["verdict"] == "pass"
     assert review["round"] == 1
-    assert review["findings"] == [MINOR]
+    assert {k: v for k, v in review["findings"][0].items() if k != "id"} == MINOR
     assert review["reviewer"] == "codex-subagent"
     workspace = store.read_task(TASK)["workspace"]["orca_id"].split("::", 1)[1]
     from conftest import git
@@ -153,12 +156,13 @@ def test_second_round_without_pass_blocks_and_keeps_findings(working, store, tmp
     cli(capsys, "task", "submit", TASK)
     cli(capsys, "task", "review", TASK, "--record", review_file(tmp_path, findings=[MAJOR], name="1.json"))
     code, out = cli(capsys, "task", "review", TASK, "--record",
-                    review_file(tmp_path, findings=[MAJOR], name="2.json"))
+                    review_file(tmp_path, findings=[{**MAJOR, "problem": "another missing error handler"}],
+                                name="2.json"))
     assert code == 0
     record = store.read_task(TASK)
     assert (record["state"], record["blocked_reason"]) == ("blocked", "review_not_converging")
     assert [r["round"] for r in record["reviews"]] == [1, 2]
-    assert record["reviews"][1]["findings"] == [MAJOR]
+    assert record["reviews"][1]["findings"][0]["problem"] == "another missing error handler"
     assert "--unread" in orca_calls(fake_orca, "worktree set")[-1]
 
 

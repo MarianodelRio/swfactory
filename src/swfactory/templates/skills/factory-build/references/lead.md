@@ -12,6 +12,15 @@ Your role: `roles/lead.md`. You own the task end to end, inside its workspace.
   only the reviews whose latest verdict is not `pass` on the current commit.
 - Read the approved design (`design` in `swfactory task show`), `docs/conventions.md` and
   `docs/working-agreements.md`, and the decisions it cites.
+- Before implementing, save a short proof plan outside the repo and record it with
+  `swfactory task proof-plan <task> --file <plan.json> --json`. Key it by every assigned AC-NN
+  and every change-wide C-NN. Each entry has `code`, `scenario`, `assertion`, `verification`
+  (an execution id from `task verify --plan`, `manual` or `inspection`) and `discrimination`
+  (which old/incorrect behavior the test detects, or why inspection/manual proof applies).
+  Update it when the approach changes. For important changed behavior, observe the expected
+  assertion fail on old behavior or a targeted fault, then pass after the fix; import/fixture
+  failures are not proof. Attach focused output with `task proof-plan ... --evidence <text-file>`.
+  Keep one plan and reuse it in reviews; shared execution does not imply shared semantic coverage.
 
 When the provider session id is available, register it with
 `swfactory task session-attach <task> --provider <claude|codex> --session <id> --role lead --json`.
@@ -39,7 +48,11 @@ explicitly partial in `/factory-improve`.
 
 ## Verify and submit
 
-1. Commit first: `finish` refuses uncommitted changes and checks run while there were any. Keep
+1. Evaluate and write project memory using `memory.md` before final verification and reviews.
+   `task show` exposes `memory_policy`; configured package docs are valid destinations too.
+   Commit the memory with this task. Do not revert a lesson just because it is outside product
+   scope; inspect the policy. Instructions, ADRs and executable docs may require fresh review.
+2. Commit first: `finish` refuses uncommitted changes and checks run while there were any. Keep
    evidence files outside the repo (or ignored), so they do not end up in the branch.
    Use focused tests while developing. For final acceptance run
    `swfactory task verify <task> --json` directly, without launching the same full suite first.
@@ -49,8 +62,8 @@ explicitly partial in `/factory-improve`.
    `manual` AC, produce real evidence (a note, `orca screenshot`, `orca snapshot`)
    and record it: `swfactory task verify <task> --manual AC-NN --evidence <file> --json`. Use
    computer use only when there is no programmatic way. Never record a secret file as evidence.
-2. Re-read your whole diff (`git diff <base>...HEAD`).
-3. If the task needs no reviews (`review: []` and none forced by the config or asked by the person),
+3. Re-read your whole diff (`git diff <base>...HEAD`).
+4. If the task needs no reviews (`review: []` and none forced by the config or asked by the person),
    skip `submit` and go to "Memory, finish and publish". Otherwise run
    `swfactory task submit <task> --json`: it hands over pending notes first (stop if `paused`) and
    lists the reviews the task needs.
@@ -70,8 +83,10 @@ code and design; `stale` means repeat it after corrections.
    Terminal silence, a timeout or an idle TUI is never a verdict. Do not schedule continuation
    wakeups or relaunch on silence. A repeated launch request reuses the reserved review.
 3. Read the recorded findings. Fix blocker/major findings or the reason for a `fail`, commit,
-   verify and repeat quality as needed. After two rounds without pass the CLI blocks: stop
-   and tell the person. Minor findings go to the PR.
+   verify and repeat quality as needed. Assess prior findings by id; do not silently omit them.
+   The configured limit counts applicable failures per type since the last authorized continuation,
+   not passes or delivery retries. If blocked, explain `review_diagnosis` and outstanding findings;
+   stop and tell the person. Minor findings go to the PR.
 4. Once quality is a current pass, `swfactory task review <task> --type conformance --json`
    launches the chosen conformance reviewer. Wait on its returned review id the same way.
    If its corrections change code, verify and obtain a current quality pass before repeating
@@ -88,8 +103,8 @@ is for historical/manual reports, not the managed review flow.
 
 ## Memory, finish and publish
 
-1. Ask the questions of `memory.md`, write what applies on this branch and commit it (it goes in
-   the same PR).
+1. Memory was prepared before reviews. If a new lesson appears now, commit it and refresh the
+   reviews indicated by `task show`; behavioral checks only need repeating when their inputs changed.
 2. `swfactory task finish <task> --memory "<summary of what you proposed>" --json` (or
    `--memory none`): the task becomes `to_merge`, and `done` once its work is merged. It hands over pending notes first: stop if `paused`. If it answers
    `gates_not_met`, fix each item in `error.details`. Mention any "changed outside the task scope"

@@ -333,6 +333,10 @@ function openDrawer(id, refresh) {
         h("span", { class: "tag " + (c.status === "verified" ? "pass" : c.status === "failed" ? "fail" : "") }, c.status),
         h("span", { class: "mono" }, c.id)), h("div", { class: "detail mono" }, c.how))))),
     section("Review status", h("div", { class: "row" }, reviewTags(task))),
+    task.review_diagnosis ? section("Review diagnosis", h("div", { class: "item" },
+      h("div", { class: "head" }, `${task.review_diagnosis.type}: ${task.review_diagnosis.failed_rounds}/${task.review_diagnosis.limit} failed rounds`),
+      h("div", {}, task.review_diagnosis.explanation),
+      h("div", { class: "detail" }, task.review_diagnosis.cause.replaceAll("_", " ")))) : [],
     section("Review history", task.review_details.length ? h("div", { class: "list" }, task.review_details.map((r) =>
       h("div", { class: "item" }, h("div", { class: "head" },
         h("span", { class: "tag " + (r.verdict === "pass" ? "pass" : "fail") }, r.verdict),

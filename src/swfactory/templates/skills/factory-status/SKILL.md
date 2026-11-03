@@ -2,7 +2,7 @@
 name: factory-status
 description: Track the Software Factory — how changes and tasks are going, what is blocked or interrupted, notes and pauses for a running agent, recovering a task or handing it to another agent, syncing with the remote, merged tasks and their cleanup, and memory maintenance. Use for "/factory-status", "¿cómo va todo?" / "how is everything going?", "¿qué está bloqueado?", "how is CHG-12.1 going?", "leave a note on 12.1", "pause 12.1", "recover 12.1", "relanza 12.1 con claude", "sincroniza" / "sync", "12.1 ya está mergeada", "limpia 12.1", or "how is the memory?".
 ---
-<!-- factory-template: skills/factory-status@2 -->
+<!-- factory-template: skills/factory-status@3 -->
 
 # /factory-status
 
@@ -76,3 +76,8 @@ Follow `references/recover.md`. Never relaunch anything without the person's con
 On "how is the memory?": run `swfactory memory check --json`, add your own reading (contradictory
 working agreements, outdated documents, `AGENTS.md` size) and propose concrete changes as a diff.
 The person commits them if they agree.
+
+For review-limit blocks, explain `review_diagnosis` and `finding_status`: what was resolved,
+what remains, and evidence for the diagnosis. Unblock only after the person authorizes continuation;
+it starts a new failure allowance and preserves all findings and history. Counts alone do not
+establish that a model is incapable.

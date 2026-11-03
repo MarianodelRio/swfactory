@@ -161,15 +161,19 @@ def show_file(ref: str, path: str, cwd: Path | None = None) -> str | None:
     return _try(["show", f"{ref}:{path}"], cwd)
 
 
-NOT_CODE = [":(exclude)docs", ":(exclude).factory"]
+def last_code_commit(base: str, cwd: Path, cfg: dict[str, Any] | None = None) -> str:
+    """Last behavioral change under the shared memory policy (including rename sources)."""
+    from swfactory import config, file_policy
 
-
-def last_code_commit(base: str, cwd: Path) -> str:
-    """The last commit since `base` that changed files outside `docs/` and `.factory/`; the
-    merge base if there is none."""
+    cfg = cfg if cfg is not None else config.load_config(cwd / ".factory/config.toml")
     merge_base = run(["merge-base", base, "HEAD"], cwd)
-    last = run(["log", "-1", "--format=%H", f"{merge_base}..HEAD", "--", ".", *NOT_CODE], cwd)
-    return last or merge_base
+    # One Git call for the whole range, including merge parents and rename sources.
+    history = run(["log", "-m", "--format=%x00%H", "--name-only", "--no-renames", f"{merge_base}..HEAD"], cwd)
+    for entry in history.split("\0"):
+        lines = [line for line in entry.splitlines() if line]
+        if lines and any(file_policy.behavioral(p, cfg) for p in lines[1:]):
+            return lines[0]
+    return merge_base
 
 
 def changed_files(base: str, cwd: Path) -> list[str]:

@@ -178,6 +178,10 @@ def test_shared_flow_register_approve_verify_and_finish(repo, fake_orca, monkeyp
     capsys.readouterr()
     assert cli(capsys, "task", "verify", TASK)[0] == 0
     assert counter.read_text() == "1"
+    from review_support import plan
+
+    from swfactory.state import TaskStore
+    plan(tasks.Context(repo.root, TaskStore(repo.root / ".factory/state")), TASK, tmp_path / "plan.json")
     code, out = cli(capsys, "task", "finish", TASK, "--memory", "none")
     assert code == 0 and out["data"]["state"] == "to_merge"
 

@@ -40,7 +40,20 @@ from typing import Any, NoReturn
 
 import yaml
 
-from swfactory import config, design, git, models, orca, reviews, sync, system, verification
+from swfactory import (
+    config,
+    design,
+    file_policy,
+    git,
+    models,
+    orca,
+    proof,
+    review_policy,
+    reviews,
+    sync,
+    system,
+    verification,
+)
 from swfactory.output import (
     EXIT_CONFLICT,
     EXIT_PRECONDITION,
@@ -427,6 +440,7 @@ def claim(task_id: str, ctx: Context) -> tuple[dict[str, Any], list[str]]:
             state = transition(state, "claim", current="ready")
             state["workspace"] = {"orca_id": workspace["id"], "branch": workspace["branch"]}
             state["attempts"] = [new_attempt(1)]
+            state["proof_required"] = task.get("complexity") != "trivial"
             return state
 
         ctx.store.update_task(task_id, start, "claim")
@@ -662,12 +676,51 @@ def unblock(task_id: str, ctx: Context) -> tuple[dict[str, Any], list[str]]:
     if not task["approved"]:
         message = f"{task['change']} is awaiting approval: approve the design again before unblocking"
         raise FactoryError("approval_not_valid", message, EXIT_PRECONDITION)
-    record = ctx.store.update_task(task_id, lambda s: transition(s, "unblock"), "unblock")
+    def apply(state: State) -> State:
+        review_stop = state["blocked_reason"] == REVIEW_NOT_CONVERGING
+        state = transition(state, "unblock")
+        if review_stop:
+            state["review_period"] = state.get("review_period", 0) + 1
+            state["review_diagnosis"] = None
+        return state
+
+    record = ctx.store.update_task(task_id, apply, "unblock")
     return {"task": task_id, "state": record["state"]}, _card(task, record, ctx)
 
 
 def workspace_path(record: State) -> Path:
     return Path(str(record["workspace"]["orca_id"]).split("::", 1)[1])
+
+
+def proof_plan(task_id: str, path: Path, evidence: list[Path], ctx: Context) -> dict[str, Any]:
+    task, _ = _started(task_id, ctx)
+    text = (ctx.main_checkout / task["design"]).read_text(encoding="utf-8")
+    cfg = _config(ctx)
+    plan_digest = verification.digest(verification.plan(task, cfg["checks"]))
+    data = proof.validate_plan(proof.read_json(path), proof.requirements(text, task),
+                               proof.execution_ids(task, cfg["checks"]))
+    paths = []
+    for source in evidence:
+        if is_secret_file(str(source)):
+            raise FactoryError("secret_file_refused", "a secret file cannot be proof evidence", EXIT_PRECONDITION)
+        try:
+            contents = source.read_text(encoding="utf-8")
+        except (OSError, UnicodeError) as exc:
+            raise proof.invalid(f"proof evidence must be readable UTF-8 text: {source}") from exc
+        target = _evidence_dir(task_id, ctx) / "proof.txt"
+        target.write_text(mask_secrets(contents), encoding="utf-8")
+        paths.append(target.relative_to(ctx.store.root).as_posix())
+
+    def apply(state: State) -> State:
+        if state["state"] not in ("in_progress", "in_review"):
+            _reject(state, "record proof plan", f"it is {state['state']}")
+        previous = state.get("proof_plan") or {}
+        retained = previous.get("evidence", []) if previous.get("design_digest") == design.digest(text) else []
+        state["proof_plan"] = {"requirements": data, "design_digest": design.digest(text),
+                               "plan_digest": plan_digest, "evidence": [*retained, *paths], "at": now()}
+        return state
+
+    return ctx.store.update_task(task_id, apply, "proof_plan")["proof_plan"]  # type: ignore[no-any-return]
 
 
 def verify(task_id: str, ctx: Context, plan_only: bool = False) -> tuple[dict[str, Any], list[str]]:
@@ -712,7 +765,8 @@ def verify(task_id: str, ctx: Context, plan_only: bool = False) -> tuple[dict[st
             _reject(state, "verify", f"it became {state['state']} while verifying")
         state["checks"] = {"status": checks_status, "at": now(), "commit": commit, "dirty": dirty,
                            "results": results, "evidence": check_evidence,
-                           "plan_digest": plan_digest, "changed_during_run": changed_during_run}
+                           "plan_digest": plan_digest, "policy_digest": file_policy.digest(cfg),
+                           "changed_during_run": changed_during_run}
         for ac in task["acceptance"]:
             state["acceptance"].setdefault(ac, {"status": "pending", "evidence": None})
         state["acceptance"].update(acceptance)
@@ -808,11 +862,17 @@ def verify_manual(task_id: str, ac: str, evidence: Path, ctx: Context) -> tuple[
         message = f"{evidence.name} looks like a secret (key or .env file) and cannot be evidence"
         raise FactoryError("secret_file_refused", message, EXIT_PRECONDITION)
     target = _evidence_dir(task_id, ctx) / f"{ac}{evidence.suffix}"
+    cwd = workspace_path(record)
+    commit = git.run(["rev-parse", "HEAD"], cwd)
     shutil.copyfile(evidence, target)
     relative = target.relative_to(ctx.store.root).as_posix()
+    changed, _ = git.uncommitted(cwd)
 
     def apply(state: State) -> State:
-        state["acceptance"][ac] = {"status": "verified", "evidence": relative}
+        if state["state"] not in ("in_progress", "in_review"):
+            _reject(state, "verify", "the task changed while attaching evidence")
+        state["acceptance"][ac] = {"status": "verified", "evidence": relative, "commit": commit,
+                                   "dirty": bool(changed) or git.run(["rev-parse", "HEAD"], cwd) != commit}
         return state
 
     ctx.store.update_task(task_id, apply, "verify_manual")
@@ -885,20 +945,32 @@ def record_review(task_id: str, path: Path, agent: str | None, ctx: Context) -> 
         message = f"the reviewed commit {report['commit']} is not on the branch of {task_id}"
         raise FactoryError("review_invalid", message, EXIT_PRECONDITION)
     commit = git.run(["rev-parse", report["commit"]], cwd)
-    max_rounds = int(_config(ctx)["review"]["max_rounds"])
+    report = json.loads(mask_secrets(json.dumps(report)))
+    report["commit"] = commit
+    import_digest = design.digest(json.dumps(report, sort_keys=True))
 
     def apply(state: State) -> State:
+        previous = next((r for r in state["reviews"] if r.get("import_digest") == import_digest), None)
+        if previous:
+            return state
         if state["state"] != "in_review":
             _reject(state, "record a review", f"it is {state['state']}")
-        round_number = 1 + sum(1 for r in state["reviews"] if r["type"] == kind)
-        state["reviews"].append({"type": kind, "reviewer": reviewer, "round": round_number, "commit": commit,
-                                 "verdict": verdict, "findings": report["findings"], "at": now()})
-        if verdict != "pass" and round_number >= max_rounds:
-            state = transition(state, "block", reason=REVIEW_NOT_CONVERGING)
-        return state
+        if any(r["type"] == kind for r in state.get("review_runs", [])):
+            raise proof.invalid("deliver managed reports with review-complete; legacy imports cannot replace them")
+        current = commit == git.run(["rev-parse", "HEAD"], cwd) and git.is_clean(cwd)
+        # Legacy quality/manual reviews remain usable; bare conformance cannot prove coverage.
+        if kind == "conformance" and verdict == "pass" and current:
+            raise proof.invalid("a conformance pass requires a reserved review with requirement coverage")
+        number = 1 + sum(r["type"] == kind for r in state["reviews"])
+        prepared = review_policy.prepare({**report, "verdict": verdict}, f"legacy-{kind}-{number}", state, False,
+                                         {} if not current else None)
+        saved = {**prepared, "type": kind, "reviewer": reviewer, "round": number, "commit": commit,
+                 "historical": not current, "period": state.get("review_period", 0), "at": now(),
+                 "import_digest": import_digest}
+        return review_policy.append(state, saved, _config(ctx))
 
     updated = ctx.store.update_task(task_id, apply, "review")
-    saved = updated["reviews"][-1]
+    saved = next(r for r in updated["reviews"] if r.get("import_digest") == import_digest)
     data = {"task": task_id, "state": updated["state"], "review": saved}
     return data, warnings + _card(task, updated, ctx)
 
@@ -932,7 +1004,8 @@ def _review_report(path: Path) -> dict[str, Any]:
             problems.append(f"finding {number}: problem is required")
     if problems:
         raise FactoryError("review_invalid", f"{path} is not a valid review", EXIT_PRECONDITION, problems)
-    return {"type": report["type"], "commit": report["commit"], "verdict": report["verdict"], "findings": findings}
+    return {key: report[key] for key in ("type", "commit", "verdict", "findings", "coverage", "deviations",
+                                        "finding_status", "diagnosis") if key in report}
 
 
 def finish(task_id: str, memory: str, ctx: Context) -> tuple[dict[str, Any], list[str]]:
@@ -955,6 +1028,12 @@ def finish(task_id: str, memory: str, ctx: Context) -> tuple[dict[str, Any], lis
     base = orca.base_branch(ctx.main_checkout)
     cwd = workspace_path(record)
     problems: list[str] = []
+    code_commit = git.last_code_commit(base, cwd, _config(ctx))
+    if record.get("proof_required"):
+        plan = record.get("proof_plan") or {}
+        if (plan.get("design_digest") != reviews.digest(task, ctx)
+                or plan.get("plan_digest") != verification.digest(verification.plan(task, _config(ctx)["checks"]))):
+            problems.append("record a current task proof-plan before finishing this nontrivial task")
 
     for ac in task["acceptance"]:
         entry = record["acceptance"].get(ac) or {}
@@ -963,12 +1042,16 @@ def finish(task_id: str, memory: str, ctx: Context) -> tuple[dict[str, Any], lis
             problems.append(f"{ac} is {status}, not verified")
         elif not _evidence_exists(entry.get("evidence"), ctx):
             problems.append(f"the evidence of {ac} is missing: verify it again")
+        elif (not entry.get("commit") or entry.get("dirty")
+              or not git.is_ancestor(code_commit, entry["commit"], cwd)):
+            problems.append(f"the evidence of {ac} does not cover current committed behavior: verify it again")
     changed, untracked = git.uncommitted(cwd)
     if changed:
         problems.append(f"the workspace has uncommitted changes ({', '.join(changed[:5])}"
                         f"{', ...' if len(changed) > 5 else ''}): commit or discard them")
-    code_commit = git.last_code_commit(base, cwd)
     checks = record.get("checks") or {}
+    if checks.get("policy_digest", file_policy.digest(_config(ctx))) != file_policy.digest(_config(ctx)):
+        problems.append("memory/freshness policy changed: verify again")
     if checks.get("status", "not_run") != "passed":
         problems.append(f"the project checks are {checks.get('status', 'not_run')}, not passed")
     elif checks.get("dirty"):
@@ -998,7 +1081,7 @@ def finish(task_id: str, memory: str, ctx: Context) -> tuple[dict[str, Any], lis
     if problems:
         raise FactoryError("gates_not_met", f"{task_id} cannot be done yet", EXIT_PRECONDITION, problems)
 
-    out_of_scope = _outside_scope(task, git.changed_files(base, cwd))
+    out_of_scope = _outside_scope(task, git.changed_files(base, cwd), _config(ctx))
     commits = git.branch_commits(base, cwd)
 
     def apply(state: State) -> State:
@@ -1023,14 +1106,15 @@ def _evidence_exists(relative: str | None, ctx: Context) -> bool:
     return bool(relative) and (ctx.store.root / str(relative)).is_file()
 
 
-def _outside_scope(task: dict[str, Any], files: list[str]) -> list[str]:
+def _outside_scope(task: dict[str, Any], files: list[str], cfg: dict[str, Any] | None = None) -> list[str]:
     """Files outside the task's `scope` globs, ignoring `docs/` and `.factory/`."""
     scope = task.get("scope")
     if not scope:
         return []
     return [
         path for path in files
-        if not path.startswith(("docs/", ".factory/")) and not any(fnmatch.fnmatch(path, g) for g in scope)
+        if not path.startswith(".factory/") and not file_policy.memory(path, cfg or {})
+        and not any(fnmatch.fnmatch(path, g) for g in scope)
     ]
 
 
@@ -1225,6 +1309,11 @@ def task_row(task: dict[str, Any], record: State | None, liveness: str | None, b
         reviews=[{k: r[k] for k in ("type", "round", "verdict", "commit")} for r in (record or {}).get("reviews", [])],
         review_status=reviews.gates(task, record, cfg, ctx) if record else {},
         review_runs=(record or {}).get("review_runs", []),
+        review_diagnosis=(record or {}).get("review_diagnosis"),
+        finding_status=review_policy.findings(record or {}),
+        proof_plan=(record or {}).get("proof_plan"),
+        proof_required=(record or {}).get("proof_required", False),
+        memory_policy=file_policy.settings(cfg),
         pull_request=(record or {}).get("pull_request"),
         broken_link=broken,
         next_step=next_step or _next_step(row, record, task, cfg, ctx),
@@ -1342,6 +1431,9 @@ def recover(task_id: str, confirm: bool, ctx: Context, replace: bool = False) ->
     def apply(state: State) -> State:
         if state["state"] not in RECOVERABLE:
             _reject(state, "recover", f"it is {state['state']}")
+        if state["state"] == "blocked" and state["blocked_reason"] == REVIEW_NOT_CONVERGING:
+            state["review_period"] = state.get("review_period", 0) + 1
+            state["review_diagnosis"] = None
         state["attempts"][-1].update(ended_at=now(), result="replaced" if state["state"] == "blocked" or replace
                                      else "interrupted")
         state["attempts"].append(new_attempt(len(state["attempts"]) + 1))
