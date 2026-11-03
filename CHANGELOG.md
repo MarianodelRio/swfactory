@@ -9,6 +9,11 @@ output, the files under `.factory/` (`schema_version`), and the skills' names an
 
 ## [Unreleased]
 
+## [3.2.0] - 2026-11-03
+
+Run `/factory-init` in each repository after upgrading to install the updated skills and roles.
+Existing bare conformance passes remain in history but need a new covered review before closing.
+
 ### Fixed
 - The board honors an authenticated stop even if the client disconnects while its response is
   being sent. The CLI reads that response completely before closing the connection.
@@ -23,7 +28,7 @@ output, the files under `.factory/` (`schema_version`), and the skills' names an
   replaces `max_rounds` (accepted as a fallback alias with the new semantics).
 - Project memory is prepared before final reviews. A shared configurable memory path policy
   handles package documentation, executable documentation and review/check freshness separately.
-- Problem 4 receives a prompt-level mitigation: lead, planner and reviewer templates ask agents
+- Prompt-level mitigation: lead, planner and reviewer templates ask agents
   to consider related cases when correcting a defect. This is guidance, not a code-enforced
   guarantee of correction completeness.
 
@@ -231,7 +236,8 @@ First stable release, published as `swfactory` on PyPI.
 
 Initial development version (not published to a package registry).
 
-[Unreleased]: https://github.com/MarianodelRio/swfactory/compare/v3.1.0...HEAD
+[Unreleased]: https://github.com/MarianodelRio/swfactory/compare/v3.2.0...HEAD
+[3.2.0]: https://github.com/MarianodelRio/swfactory/compare/v3.1.0...v3.2.0
 [3.1.0]: https://github.com/MarianodelRio/swfactory/compare/v3.0.0...v3.1.0
 [3.0.0]: https://github.com/MarianodelRio/swfactory/compare/v2.1.0...v3.0.0
 [2.1.0]: https://github.com/MarianodelRio/swfactory/compare/v2.0.0...v2.1.0
