@@ -64,7 +64,7 @@ def test_every_cli_command_used_exists():
         if root.joinpath("references").is_dir():
             texts += [f.read_text() for f in root.joinpath("references").iterdir()]
         for text in texts:
-            pattern = (r"swfactory (doctor|init|status|sync|check|models|design \w+|task \w+|memory \w+|"
+            pattern = (r"swfactory (doctor|init|status|sync|check|models|design \w+|task [\w-]+|memory \w+|"
                       r"board \w+|improve \w+)")
             commands |= set(re.findall(pattern, text))
     parser = build_parser()

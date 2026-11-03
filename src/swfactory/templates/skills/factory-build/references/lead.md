@@ -13,6 +13,13 @@ Your role: `roles/lead.md`. You own the task end to end, inside its workspace.
 - Read the approved design (`design` in `swfactory task show`), `docs/conventions.md` and
   `docs/working-agreements.md`, and the decisions it cites.
 
+When the provider session id is available, register it with
+`swfactory task session-attach <task> --provider <claude|codex> --session <id> --role lead --json`.
+Never invent an id. When launching separate validation sessions (especially from temporary
+folders), capture their provider ids and attach each with `--role validation`, plus `--parent`
+when known. Proven descendants are discovered automatically. Unregistered history remains
+explicitly partial in `/factory-improve`.
+
 ## Work by complexity
 
 | Complexity | Flow |
@@ -34,8 +41,12 @@ Your role: `roles/lead.md`. You own the task end to end, inside its workspace.
 
 1. Commit first: `finish` refuses uncommitted changes and checks run while there were any. Keep
    evidence files outside the repo (or ignored), so they do not end up in the branch.
-   `swfactory task verify <task> --json` runs the project checks and each AC command in this
-   workspace. For a `manual` AC, produce real evidence (a note, `orca screenshot`, `orca snapshot`)
+   Use focused tests while developing. For final acceptance run
+   `swfactory task verify <task> --json` directly, without launching the same full suite first.
+   It runs project checks and AC commands; explicit shared references reuse one execution in
+   that invocation. `swfactory task verify <task> --plan --json` shows the execution plan.
+   A new verify always runs again; do not edit the approved design to remove checks. For a
+   `manual` AC, produce real evidence (a note, `orca screenshot`, `orca snapshot`)
    and record it: `swfactory task verify <task> --manual AC-NN --evidence <file> --json`. Use
    computer use only when there is no programmatic way. Never record a secret file as evidence.
 2. Re-read your whole diff (`git diff <base>...HEAD`).
@@ -46,22 +57,34 @@ Your role: `roles/lead.md`. You own the task end to end, inside its workspace.
 
 ## Reviews
 
-- **Quality** (if required): start a read-only subagent with `roles/quality_reviewer.md` on the
-  diff. If your client has no subagents, run `swfactory task review <task> --type quality --agent <agent> --json`
-  with the conformance reviewer's provider (or your own if there is none).
-- **Conformance** (if required): `swfactory task review <task> --type conformance --json` (add
-  `--agent <claude|codex>` if no reviewer was chosen at launch). Orca opens the reviewer in this
-  workspace, with the model chosen for it at launch.
-- For a reviewer launched in Orca, read its terminal (the `terminal` in the answer) with
-  `orca terminal read --terminal <terminal>` until its final JSON appears; `orca terminal wait`
-  can return before the agent has finished, so never take its output as the answer by itself.
-- Each reviewer ends with JSON (`type`, `commit`, `verdict`, `findings`). Save it to a file outside
-  the repo (so it is not committed) and record it: `swfactory task review <task> --record <file> --json`.
-- Fix `blocker` and `major` findings (or, for a `fail` without them, what the reviewer says must
-  change), verify again and repeat that review. After two rounds
-  without `pass` the CLI blocks the task with the findings saved: stop and tell the person.
-  `minor` findings do not block; they go to the PR.
-- Reviewers never edit files or approve anything.
+Run **quality first, then conformance** when both are required. Do not change code while a
+review is outstanding. `task show` reports `review_status`: only `passed` covers the current
+code and design; `stale` means repeat it after corrections.
+
+1. `swfactory task review <task> --type quality --json` reserves a review id and returns its
+   `prompt`. Launch a read-only native subagent with exactly that prompt. If your client has no
+   subagents, add `--agent <agent>` and Orca launches it. The reviewer delivers its report
+   directly with `task review-complete`; never copy its JSON from a terminal.
+2. `swfactory task review-wait <task> --review <id> --timeout 60 --json` observes the persisted
+   result. If `pending` is true, the review is still unresolved: wait again on the same id.
+   Terminal silence, a timeout or an idle TUI is never a verdict. Do not schedule continuation
+   wakeups or relaunch on silence. A repeated launch request reuses the reserved review.
+3. Read the recorded findings. Fix blocker/major findings or the reason for a `fail`, commit,
+   verify and repeat quality as needed. After two rounds without pass the CLI blocks: stop
+   and tell the person. Minor findings go to the PR.
+4. Once quality is a current pass, `swfactory task review <task> --type conformance --json`
+   launches the chosen conformance reviewer. Wait on its returned review id the same way.
+   If its corrections change code, verify and obtain a current quality pass before repeating
+   conformance. Use `task show` to identify obsolete passes before attempting finish.
+5. A failed launch or abandoned reviewer remains visible. Inspect it; only when it is known to
+   be abandoned use `swfactory task review-cancel <task> --review <id> --reason "..." --json`
+   before starting a replacement. Cancellation does not stop its agent. Late reports remain
+   in history, without replacing a newer result or reopening a closed task.
+
+Reviewers do not edit product files or approve designs. Their permitted write is their own
+report via `swfactory task review-complete <task> --review <id> --file <report.json> --json`
+(or `--file -` for stdin). The file lives outside the repo. Legacy `task review --record`
+is for historical/manual reports, not the managed review flow.
 
 ## Memory, finish and publish
 

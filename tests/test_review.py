@@ -82,8 +82,9 @@ def test_pause_before_submit_blocks_instead(working, store, capsys):
     assert store.read_task(TASK)["state"] == "blocked"
 
 
-def test_conformance_review_launches_an_orca_agent(working, store, fake_orca, capsys):
+def test_conformance_review_launches_an_orca_agent(working, store, fake_orca, capsys, tmp_path):
     cli(capsys, "task", "submit", TASK)
+    cli(capsys, "task", "review", TASK, "--record", review_file(tmp_path))
     code, out = cli(capsys, "task", "review", TASK, "--type", "conformance")
     assert code == 0, out
     launch = orca_calls(fake_orca, "agent launch")[-1]
@@ -92,7 +93,8 @@ def test_conformance_review_launches_an_orca_agent(working, store, fake_orca, ca
     prompt = launch[launch.index("--prompt") + 1]
     assert "You verify that the implementation matches the approved design" in prompt
     assert TASK in prompt
-    assert "git diff main...HEAD" in prompt
+    assert "git diff " in prompt and "review-complete" in prompt
+    assert store.read_task(TASK)["review_runs"][-1]["commit"] in prompt
     assert out["data"]["launched"] is True
 
 
@@ -102,6 +104,8 @@ def test_quality_review_is_a_subagent_unless_an_agent_is_given(working, fake_orc
     assert out["data"]["launched"] is False
     assert "subagent" in out["data"]["message"]
     assert len(orca_calls(fake_orca, "agent launch")) == 1  # only the lead
+    cli(capsys, "task", "review-cancel", TASK, "--review", out["data"]["review_id"],
+        "--reason", "use Orca instead of a native subagent")
     _, out = cli(capsys, "task", "review", TASK, "--type", "quality", "--agent", "codex")
     assert out["data"]["launched"] is True
 

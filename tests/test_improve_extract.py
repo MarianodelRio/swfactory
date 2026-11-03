@@ -77,7 +77,7 @@ def test_state_without_any_session_is_missing_but_keeps_lifecycle(tmp_path):
     assert task["lifecycle"]["attempts"] == 1
 
 
-def test_full_coverage_counts_tool_calls_tokens_and_failing_commands(tmp_path):
+def test_observed_counts_do_not_claim_complete_historical_membership(tmp_path):
     store = TaskStore(tmp_path / "state")
     workspace = tmp_path / "work" / "repo"
     reviews = [{"type": "quality", "round": 1, "verdict": "fail", "commit": "a", "findings": []},
@@ -94,8 +94,9 @@ def test_full_coverage_counts_tool_calls_tokens_and_failing_commands(tmp_path):
     ]))
 
     [task] = improve.extract([TASK], store, tmp_path / "home")["tasks"]
-    assert task["coverage"] == "full"
-    assert task["coverage_gaps"] == []
+    assert task["coverage"] == "partial"
+    assert task["session_membership"] == "inferred"
+    assert any("membership is inferred" in gap for gap in task["coverage_gaps"])
     assert task["lifecycle"]["review_rounds_total"] == 2
     assert task["lifecycle"]["reviews"]["quality"]["verdicts"] == ["fail", "pass"]
     claude = task["evidence"]["claude"]

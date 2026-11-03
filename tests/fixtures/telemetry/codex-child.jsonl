@@ -1,0 +1,7 @@
+{"type":"session_meta","payload":{"id":"child","cwd":"/tmp/validation","timestamp":"2026-10-28T10:04:00Z","source":{"subagent":{"thread_spawn":{"parent_thread_id":"parent","depth":1}}}}}
+{"timestamp":"2026-10-28T10:01:00Z","payload":{"type":"custom_tool_call","name":"exec","call_id":"inherited-call","input":"const r = await tools.exec_command({cmd: \"pytest\"}); text(r);"}}
+{"timestamp":"2026-10-28T10:01:01Z","payload":{"type":"custom_tool_call_output","call_id":"inherited-call","output":[{"type":"input_text","text":"Script completed\nWall time 0.1 seconds\nOutput:\n"},{"type":"input_text","text":"test output without execution status"}]}}
+{"timestamp":"2026-10-28T10:03:00Z","payload":{"type":"token_count","info":{"total_token_usage":{"total_tokens":210}}}}
+{"timestamp":"2026-10-28T10:05:00Z","payload":{"type":"function_call","name":"exec_command","call_id":"child-call","arguments":{"cmd":"pytest tests/test_recovery.py"}}}
+{"timestamp":"2026-10-28T10:05:01Z","payload":{"type":"function_call_output","call_id":"child-call","output":[{"type":"input_text","text":"{\"chunk_id\":\"chunk\",\"exit_code\":1,\"output\":\"assertion failed\"}"}]}}
+{"timestamp":"2026-10-28T10:06:00Z","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":40,"output_tokens":2,"total_tokens":42}}}}

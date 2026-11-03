@@ -1,4 +1,4 @@
-<!-- factory-template: design/design.md@3 -->
+<!-- factory-template: design/design.md@4 -->
 <!-- Replace CHG-N with the id reserved by `swfactory design register` (e.g. CHG-12; tasks CHG-12.1, CHG-12.2). Keep the design proportional
      to the change; delete these comments. Everything here is in English. -->
 # CHG-N — Title
@@ -30,7 +30,9 @@ interfaces between tasks, known pitfalls.
   review: [quality]
   scope: ["src/…/**"]          # optional
   integrate: pr                # optional: pr (the person merges) or merge; default git.integrate
+  # Optional: verification: {behavior: "pytest tests/test_behavior.py"}
   acceptance:
+    # Shared forms: AC-01: {check: test} or AC-01: {verification: behavior}
     AC-01: "pytest …"            # one program and its arguments, run without a shell
     AC-02: manual                # proven by a person or a screenshot
 ```

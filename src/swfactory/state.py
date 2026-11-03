@@ -47,6 +47,8 @@ def empty_state(task_id: str) -> State:
         "acceptance": {},
         "checks": None,
         "reviews": [],
+        "review_runs": [],
+        "sessions": [],
         "notes": [],
         "memory": None,
         "commits": [],

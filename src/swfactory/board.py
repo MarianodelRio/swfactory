@@ -25,7 +25,7 @@ from importlib import resources
 from pathlib import Path
 from typing import Any
 
-from swfactory import activity, config, design, orca, sync, system, tasks
+from swfactory import activity, config, design, orca, sync, system, tasks, verification
 from swfactory.output import EXIT_CONFLICT, EXIT_ERROR, EXIT_UNAVAILABLE, FactoryError, mask_secrets
 from swfactory.state import TaskStore, now
 
@@ -156,7 +156,8 @@ def _details(task: dict[str, Any], record: dict[str, Any] | None) -> dict[str, A
     attempt = record["attempts"][-1] if record.get("attempts") else {}
     notes = record.get("notes") or []
     return {
-        "criteria": [{"id": ac, "how": how, "status": (stored.get(ac) or {}).get("status", "pending"),
+        "criteria": [{"id": ac, "how": verification.describe(how),
+                      "status": (stored.get(ac) or {}).get("status", "pending"),
                       "evidence": (stored.get(ac) or {}).get("evidence")}
                      for ac, how in task["acceptance"].items()],
         "checks": (record.get("checks") or {}).get("status"),

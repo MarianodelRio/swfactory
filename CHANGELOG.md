@@ -9,6 +9,17 @@ output, the files under `.factory/` (`schema_version`), and the skills' names an
 
 ## [Unreleased]
 
+### Added
+- Explicit shared check/task-verification references for acceptance criteria, inspectable
+  execution plans and one evidence file per execution. Changed definitions invalidate old
+  evidence. Legacy commands stay independent and repeated verify calls always run afresh.
+- Session registration for external validations and provenance-aware metrics: raw/unique calls,
+  inherited-record deduplication, explicit unknown outcomes, per-session usage coverage,
+  conservative parent/child aggregation, read-only SQLite fallback and unblock counts.
+- Durable review requests with pinned commits/designs, direct idempotent reviewer delivery,
+  bounded waits and explicit cancellation. Quality precedes conformance. Task views and finish
+  share review freshness checks; late results remain in history.
+
 ## [3.1.0] - 2026-10-29
 
 ### Fixed

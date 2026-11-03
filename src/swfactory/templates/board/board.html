@@ -198,17 +198,13 @@ function clock(iso) {
 const accent = (column) => `--accent: var(${(COLUMNS.find((c) => c[0] === column) || COLUMNS[1])[2]})`;
 
 function reviewTags(task) {
-  const tags = [];
-  const required = task.required_reviews || [];
-  for (const type of required) {
-    const done = task.review_details.filter((r) => r.type === type);
-    const last = done[done.length - 1];
-    if (!last) tags.push(h("span", { class: "tag" + (task.state === "in_review" ? " wait" : "") },
-      `${type} ${task.state === "in_review" ? "⟳" : "·"}`));
-    else tags.push(h("span", { class: "tag " + (last.verdict === "pass" ? "pass" : "fail") },
-      `${type} ${last.verdict === "pass" ? "✓" : "✗"}${last.round > 1 ? " r" + last.round : ""}`));
-  }
-  return tags;
+  const statuses = task.review_status || {};
+  const types = [...new Set([...(task.required_reviews || []), ...Object.keys(statuses)])];
+  return types.map((type) => {
+    const status = statuses[type] || "missing";
+    const style = status === "passed" ? "pass" : ["failed", "launch_failed"].includes(status) ? "fail" : "wait";
+    return h("span", { class: "tag " + style }, `${type} ${status.replaceAll("_", " ")}`);
+  });
 }
 function pipClass(run) {
   if (run.state === "closed") return "pip closed";
@@ -336,7 +332,8 @@ function openDrawer(id, refresh) {
       task.criteria.map((c) => h("div", { class: "item" }, h("div", { class: "head" },
         h("span", { class: "tag " + (c.status === "verified" ? "pass" : c.status === "failed" ? "fail" : "") }, c.status),
         h("span", { class: "mono" }, c.id)), h("div", { class: "detail mono" }, c.how))))),
-    section("Reviews", task.review_details.length ? h("div", { class: "list" }, task.review_details.map((r) =>
+    section("Review status", h("div", { class: "row" }, reviewTags(task))),
+    section("Review history", task.review_details.length ? h("div", { class: "list" }, task.review_details.map((r) =>
       h("div", { class: "item" }, h("div", { class: "head" },
         h("span", { class: "tag " + (r.verdict === "pass" ? "pass" : "fail") }, r.verdict),
         h("span", {}, `${r.type} · round ${r.round}`), h("span", { class: "faint mono" }, r.commit)),

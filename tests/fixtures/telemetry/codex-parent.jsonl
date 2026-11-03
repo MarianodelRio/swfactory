@@ -1,0 +1,5 @@
+{"type":"session_meta","payload":{"id":"parent","cwd":"/work/task","timestamp":"2026-10-28T10:00:00Z","source":"cli"}}
+{"timestamp":"2026-10-28T10:01:00Z","payload":{"type":"custom_tool_call","name":"exec","call_id":"inherited-call","input":"const r = await tools.exec_command({cmd: \"pytest\"}); text(r);"}}
+{"timestamp":"2026-10-28T10:01:01Z","payload":{"type":"custom_tool_call_output","call_id":"inherited-call","output":[{"type":"input_text","text":"Script completed\nWall time 0.1 seconds\nOutput:\n"},{"type":"input_text","text":"test output without execution status"}]}}
+{"timestamp":"2026-10-28T10:02:00Z","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":100,"output_tokens":5,"total_tokens":105},"last_token_usage":{"total_tokens":105}}}}
+{"timestamp":"2026-10-28T10:03:00Z","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":200,"output_tokens":10,"total_tokens":210},"last_token_usage":{"total_tokens":105}}}}

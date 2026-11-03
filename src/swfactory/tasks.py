@@ -35,13 +35,12 @@ import re
 import shutil
 import subprocess
 from collections.abc import Callable
-from importlib import resources
 from pathlib import Path
 from typing import Any, NoReturn
 
 import yaml
 
-from swfactory import config, design, git, models, orca, sync, system
+from swfactory import config, design, git, models, orca, reviews, sync, system, verification
 from swfactory.output import (
     EXIT_CONFLICT,
     EXIT_PRECONDITION,
@@ -383,7 +382,9 @@ def show_task(task_id: str, ctx: Context) -> dict[str, Any]:
     task = _task(task_id, ctx)
     shown = view(task, ctx)
     definition = {k: v for k, v in task.items() if k not in ("change", "approved")}
-    return {**definition, **shown, "record": ctx.store.read_task(task_id)}
+    record = ctx.store.read_task(task_id)
+    return {**definition, **shown, "record": record,
+            "review_status": reviews.gates(task, record, _config(ctx), ctx) if record else {}}
 
 
 def new_attempt(number: int) -> dict[str, Any]:
@@ -568,8 +569,11 @@ def _started(task_id: str, ctx: Context) -> tuple[dict[str, Any], State]:
     return task, record
 
 
-def pending_reviews(task: dict[str, Any], record: State, cfg: dict[str, Any]) -> list[str]:
+def pending_reviews(task: dict[str, Any], record: State, cfg: dict[str, Any],
+                    ctx: Context | None = None) -> list[str]:
     """Required review types whose latest verdict is not `pass`."""
+    if ctx is not None:
+        return [kind for kind, status in reviews.gates(task, record, cfg, ctx).items() if status != "passed"]
     pending = []
     for kind in effective_reviews(task, cfg):
         latest = [r for r in record.get("reviews", []) if r["type"] == kind]
@@ -598,7 +602,7 @@ def card_detail(record: State, pending: list[str] | None = None) -> str | None:
 
 def _card(task: dict[str, Any], record: State, ctx: Context) -> list[str]:
     workspace = record["workspace"]["orca_id"]
-    pending = pending_reviews(task, record, _config(ctx)) if record["state"] == "in_review" else None
+    pending = pending_reviews(task, record, _config(ctx), ctx) if record["state"] == "in_review" else None
     return orca.update_card(workspace, task["id"], task["title"], record["state"], card_detail(record, pending))
 
 
@@ -666,7 +670,7 @@ def workspace_path(record: State) -> Path:
     return Path(str(record["workspace"]["orca_id"]).split("::", 1)[1])
 
 
-def verify(task_id: str, ctx: Context) -> tuple[dict[str, Any], list[str]]:
+def verify(task_id: str, ctx: Context, plan_only: bool = False) -> tuple[dict[str, Any], list[str]]:
     """Run the project checks and each AC command in the task's workspace. An AC is
     `verified` only on exit code 0; a command that cannot run is `not_run`, never passed."""
     task, record = _started(task_id, ctx)
@@ -674,41 +678,52 @@ def verify(task_id: str, ctx: Context) -> tuple[dict[str, Any], list[str]]:
         _reject(record, "verify", f"it is {record['state']}")
     cfg = _config(ctx)
     cwd = workspace_path(record)
+    entries = verification.plan(task, cfg["checks"])
+    plan_digest = verification.digest(entries)
+    if plan_only:
+        return {"task": task_id, "plan": entries, "plan_digest": plan_digest}, []
     evidence_dir = _evidence_dir(task_id, ctx)
     changed, untracked = git.uncommitted(cwd)
     dirty = bool(changed)
-
+    commit = git.run(["rev-parse", "HEAD"], cwd)
     results: dict[str, str] = {}
     check_evidence: dict[str, str] = {}
-    for name, command in cfg["checks"].items():
-        results[name], check_evidence[name] = _run_evidence(command, cwd, evidence_dir / f"check-{name}.txt", ctx)
+    acceptance: dict[str, dict[str, Any]] = {}
+    executions = []
+    for number, entry in enumerate(entries, start=1):
+        outcome, evidence = _run_evidence(entry["command"], cwd, evidence_dir / f"execution-{number}.txt", ctx)
+        executions.append({**entry, "status": outcome, "evidence": evidence, "commit": commit})
+        for name in entry["checks"]:
+            results[name], check_evidence[name] = outcome, evidence
+        for ac in entry["acceptance"]:
+            acceptance[ac] = {"status": "verified" if outcome == "passed" else outcome,
+                              "evidence": evidence, "execution": entry["id"], "commit": commit}
     if not results or "not_run" in results.values():
         checks_status = "not_run"
     else:
         checks_status = "failed" if "failed" in results.values() else "passed"
-
-    acceptance: dict[str, dict[str, Any]] = {}
-    for ac, how in task["acceptance"].items():
-        if how == "manual":
-            continue
-        outcome, evidence = _run_evidence(how, cwd, evidence_dir / f"{ac}.txt", ctx)
-        acceptance[ac] = {"status": "verified" if outcome == "passed" else outcome, "evidence": evidence}
-    commit = git.run(["rev-parse", "HEAD"], cwd)
+    after_changed, after_untracked = git.uncommitted(cwd)
+    changed_during_run = git.run(["rev-parse", "HEAD"], cwd) != commit
+    dirty = dirty or bool(after_changed) or changed_during_run
+    untracked = sorted(set(untracked) | set(after_untracked))
 
     def apply(state: State) -> State:
         if state["state"] not in ("in_progress", "in_review"):
             _reject(state, "verify", f"it became {state['state']} while verifying")
         state["checks"] = {"status": checks_status, "at": now(), "commit": commit, "dirty": dirty,
-                           "results": results, "evidence": check_evidence}
+                           "results": results, "evidence": check_evidence,
+                           "plan_digest": plan_digest, "changed_during_run": changed_during_run}
         for ac in task["acceptance"]:
             state["acceptance"].setdefault(ac, {"status": "pending", "evidence": None})
         state["acceptance"].update(acceptance)
+        state["verification_runs"] = executions
         return state
 
     updated = ctx.store.update_task(task_id, apply, "verify")
     warnings = [UNCOMMITTED_VERIFY] if dirty else []
     warnings += _untracked_warning(untracked)
-    return {"task": task_id, "checks": updated["checks"], "acceptance": updated["acceptance"]}, warnings
+    return {"task": task_id, "checks": updated["checks"], "acceptance": updated["acceptance"],
+            "executions": executions}, warnings
 
 
 UNCOMMITTED_VERIFY = "the workspace has uncommitted changes: commit them and verify again before finishing"
@@ -845,39 +860,7 @@ def submit(task_id: str, ctx: Context) -> tuple[dict[str, Any], list[str]]:
 
 def review(task_id: str, kind: str, agent: str | None, ctx: Context, model: str | None = None,
            effort: str | None = None) -> tuple[dict[str, Any], list[str]]:
-    """Launch a reviewer: conformance is an Orca agent in the same workspace, with the model chosen
-    at launch for the reviewer; quality is a read-only subagent of the lead unless an agent is named
-    (client without subagents)."""
-    task, record = _started(task_id, ctx)
-    if record["state"] != "in_review":
-        _reject(record, "review", f"it is {record['state']}; submit it first")
-    attempt = record["attempts"][-1]
-    if kind == "quality" and agent is None:
-        message = (f"the quality review runs as a read-only subagent of the lead; record its JSON with "
-                   f"swfactory task review {task_id} --record <file>")
-        return {"task": task_id, "type": kind, "launched": False, "message": message}, []
-    if agent is None or agent == attempt.get("reviewer"):
-        model = model or attempt.get("reviewer_model")
-        effort = effort or attempt.get("reviewer_effort")
-    agent = agent or attempt.get("reviewer")
-    if not agent:
-        message = "name the reviewer with --agent (it was not given at launch with --reviewer)"
-        raise FactoryError("review_agent_missing", message, EXIT_USAGE)
-    model, warnings = models.resolve(agent, model, effort, Path.home())
-    orca.check(_min_version(ctx))
-    base = orca.base_branch(ctx.main_checkout)
-    role = resources.files("swfactory").joinpath(f"templates/roles/{kind}_reviewer.md").read_text(encoding="utf-8")
-    prompt = (
-        f"{role}\n"
-        f"Review task {task_id} ({task['title']}) of change {task['change']} in this workspace.\n"
-        f"- Approved design and acceptance criteria: {task['design']}\n"
-        f"- Task, evidence and checks: swfactory task show {task_id} --json\n"
-        f"- The change to review: git diff {base}...HEAD\n"
-        "Do not edit files. End with the JSON; the lead agent records it."
-    )
-    launched = orca.launch_agent(record["workspace"]["orca_id"], agent, prompt, model, effort)
-    data = {"task": task_id, "type": kind, "agent": agent, "model": model, "launched": True, **launched}
-    return data, warnings
+    return reviews.start(task_id, kind, agent, ctx, model, effort)
 
 
 def record_review(task_id: str, path: Path, agent: str | None, ctx: Context) -> tuple[dict[str, Any], list[str]]:
@@ -995,12 +978,19 @@ def finish(task_id: str, memory: str, ctx: Context) -> tuple[dict[str, Any], lis
     else:
         problems += [f"the evidence of the {name} check is missing: verify again"
                      for name, path in (checks.get("evidence") or {}).items() if not _evidence_exists(path, ctx)]
-    for kind in effective_reviews(task, _config(ctx)):
-        latest = [r for r in record["reviews"] if r["type"] == kind]
-        if not latest or latest[-1]["verdict"] != "pass":
-            problems.append(f"the {kind} review has no pass verdict")
-        elif not git.is_ancestor(code_commit, latest[-1]["commit"], cwd):
-            problems.append(f"the {kind} review passed on {latest[-1]['commit'][:8]}, not on the last commit with code")
+    if checks.get("plan_digest"):
+        try:
+            current_plan = verification.digest(verification.plan(task, _config(ctx)["checks"]))
+        except FactoryError as exc:
+            problems.append(exc.message)
+        else:
+            if checks["plan_digest"] != current_plan:
+                problems.append("verification commands or acceptance bindings changed: verify again")
+    for kind, status in reviews.gates(task, record, _config(ctx), ctx).items():
+        if status == "stale":
+            problems.append(f"the {kind} review does not cover the last commit with code or current design")
+        elif status != "passed":
+            problems.append(f"the {kind} review has no current pass verdict ({status})")
     if not memory.strip():
         problems.append("memory was not evaluated: pass --memory '<summary>' or --memory none")
     if not task["approved"]:
@@ -1115,7 +1105,7 @@ def pr_body(task: dict[str, Any], record: State) -> str:
     for ac, how in task["acceptance"].items():
         entry = record["acceptance"].get(ac) or {}
         evidence = Path(entry["evidence"]).name if entry.get("evidence") else "no evidence"
-        lines.append(f"- {ac} ({how}): {entry.get('status', 'pending')} — evidence `{evidence}`")
+        lines.append(f"- {ac} ({verification.describe(how)}): {entry.get('status', 'pending')} — evidence `{evidence}`")
     checks = record.get("checks") or {}
     lines += ["", f"Project checks: {checks.get('status', 'not run')}.", "", "## Reviews", ""]
     if not record["reviews"]:
@@ -1233,6 +1223,8 @@ def task_row(task: dict[str, Any], record: State | None, liveness: str | None, b
         acceptance={"verified": sum(1 for a in acceptance.values() if a.get("status") == "verified"),
                     "total": len(task["acceptance"])},
         reviews=[{k: r[k] for k in ("type", "round", "verdict", "commit")} for r in (record or {}).get("reviews", [])],
+        review_status=reviews.gates(task, record, cfg, ctx) if record else {},
+        review_runs=(record or {}).get("review_runs", []),
         pull_request=(record or {}).get("pull_request"),
         broken_link=broken,
         next_step=next_step or _next_step(row, record, task, cfg, ctx),
@@ -1283,7 +1275,8 @@ def _next_step(
     if state == "in_progress":
         return (card_detail(record) or "") if record else ""
     if state == "in_review":
-        return "reviews: " + (", ".join(effective_reviews(task, cfg)) or "none required") + ", then finish"
+        statuses = reviews.gates(task, record, cfg, ctx) if record else {}
+        return "reviews: " + (", ".join(f"{k} {v}" for k, v in statuses.items()) or "none required") + ", then finish"
     if state == "blocked":
         return f"resolve '{row['reason']}', then swfactory task unblock {task['id']}"
     if state == "interrupted":

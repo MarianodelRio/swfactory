@@ -25,7 +25,7 @@ from typing import Any
 
 import yaml
 
-from swfactory import git, orca, sync, system, tasks
+from swfactory import config, git, orca, sync, system, tasks, verification
 from swfactory.output import EXIT_PRECONDITION, FactoryError
 from swfactory.state import TaskStore, now
 
@@ -40,7 +40,7 @@ AC_LINE = re.compile(r"^\s*-\s*(AC-\d{2,})\s*:")
 FENCE = re.compile(r"^```yaml\s*\n(.*?)^```\s*$", re.MULTILINE | re.DOTALL)
 
 REQUIRED = ("id", "title", "depends_on", "complexity", "review", "acceptance")
-OPTIONAL = ("scope", "integrate")
+OPTIONAL = ("scope", "integrate", "verification")
 INTEGRATE_MODES = ("pr", "merge")
 COMPLEXITIES = ("trivial", "normal", "complex")
 REVIEW_TYPES = ("quality", "conformance")
@@ -114,7 +114,8 @@ def section(text: str, title: str) -> str | None:
     return match.group(1) if match else None
 
 
-def parse_design(design_md: str, change_id: str, known_tasks: set[str]) -> dict[str, Any]:
+def parse_design(design_md: str, change_id: str, known_tasks: set[str],
+                 checks: dict[str, str] | None = None) -> dict[str, Any]:
     """Validate the acceptance criteria and the task block of a change and return both.
 
     `known_tasks` are task ids of other changes that `depends_on` may refer to.
@@ -131,7 +132,7 @@ def parse_design(design_md: str, change_id: str, known_tasks: set[str]) -> dict[
 
     tasks = _task_block(text, errors)
     if tasks is not None:
-        _validate_tasks(tasks, change_id, known_tasks, criteria, errors)
+        _validate_tasks(tasks, change_id, known_tasks, criteria, errors, checks or {})
 
     if errors:
         message = f"the design of {change_id} has {len(errors)} problem(s)"
@@ -166,6 +167,7 @@ def _validate_tasks(
     known_tasks: set[str],
     criteria: list[str],
     errors: list[str],
+    checks: dict[str, str],
 ) -> None:
     id_pattern = re.compile(rf"^{re.escape(change_id)}(?:\.[1-9]\d*|-\d{{2,}})$")
     ids = [str(t.get("id")) for t in tasks]
@@ -214,6 +216,18 @@ def _validate_tasks(
                     if str(dep) not in own and str(dep) not in known_tasks:
                         errors.append(f"{name}: depends on unknown task '{dep}'")
 
+        named = task.get("verification", {})
+        if not isinstance(named, dict):
+            errors.append(f"{name}: verification must map names to commands")
+            named = {}
+        for key, command in named.items():
+            if not isinstance(key, str) or not verification.NAME.fullmatch(key):
+                errors.append(f"{name}: verification names must contain letters, numbers, underscores or dashes")
+            if not isinstance(command, str) or not command.strip():
+                errors.append(f"{name}: verification {key} needs a command")
+            elif problem := command_problem(command):
+                errors.append(f"{name}: verification {key} {problem}")
+
         acceptance = task.get("acceptance")
         if "acceptance" in task:
             if not isinstance(acceptance, dict) or not acceptance:
@@ -224,7 +238,13 @@ def _validate_tasks(
                         errors.append(f"{name}: '{ac}' is not an AC id (AC-NN)")
                     elif ac not in criteria:
                         errors.append(f"{name}: {ac} is not in '## Acceptance criteria'")
-                    if not isinstance(how, str) or not how.strip():
+                    if isinstance(how, dict):
+                        ref = verification.reference(how)
+                        if ref is None:
+                            errors.append(f"{name}: {ac} needs {{check: name}} or {{verification: name}}")
+                        elif ref[1] not in (checks if ref[0] == "check" else named):
+                            errors.append(f"{name}: {ac} references missing {ref[0]} '{ref[1]}'")
+                    elif not isinstance(how, str) or not how.strip():
                         errors.append(f"{name}: {ac} needs a command or 'manual'")
                     elif how != "manual" and (problem := command_problem(how)):
                         errors.append(f"{name}: {ac} {problem}")
@@ -274,14 +294,34 @@ def command_warnings(tasks: list[dict[str, Any]], root: Path) -> list[str]:
     """AC commands whose program is not found here: a sentence instead of a command, or a tool
     that `task verify` will not find either. A warning, since the workspace may differ."""
     warnings = []
+    checks = config.load_config(root / ".factory/config.toml")["checks"]
     for task in tasks:
+        commands: dict[str, list[str]] = {}
+        for name, cmd in checks.items():
+            commands.setdefault(cmd, []).append(f"check:{name}")
+        named = task.get("verification") or {}
         for ac, how in (task.get("acceptance") or {}).items():
             if how == "manual":
                 continue
-            program = system.program(how)
+            if isinstance(how, dict):
+                ref = verification.reference(how)
+                if ref is None:
+                    continue
+                command = (checks if ref[0] == "check" else named).get(ref[1])
+                if command is None:
+                    continue
+            else:
+                command = how
+                commands.setdefault(command, []).append(ac)
+            program = system.program(command)
             if not (shutil.which(program) or (root / program).is_file()):
                 warnings.append(f"{task['id']}: {ac} runs '{program}', which is not found here: "
                                 "check it is a command, or make the AC manual")
+        for obligations in commands.values():
+            if len(obligations) > 1 and any(o.startswith("AC-") for o in obligations):
+                warnings.append(f"{task['id']}: duplicate command for {', '.join(obligations)}; "
+                                "use explicit shared check/verification references when one execution suffices")
+
     return warnings
 
 
@@ -372,7 +412,8 @@ def register(change_id: str, changes_dir: Path) -> tuple[dict[str, Any], list[st
     folder = _folder(change_id, changes_dir)
     _refuse_rejected(change_id, folder)
     text = _design_text(folder)
-    parsed = parse_design(text, change_id, known_tasks(changes_dir, exclude=change_id))
+    parsed = parse_design(text, change_id, known_tasks(changes_dir, exclude=change_id),
+                              config.load_config(changes_dir.parent / "config.toml")["checks"])
     warnings = scope_overlaps(parsed["tasks"]) + command_warnings(parsed["tasks"], changes_dir.parent.parent)
     return {"change": change_id, "digest": digest(text), **parsed}, warnings
 
@@ -384,7 +425,8 @@ def show(change_id: str, changes_dir: Path, store: TaskStore, main_changes_dir: 
     folder = _folder(change_id, changes_dir)
     text = _design_text(folder)
     try:
-        parsed = parse_design(text, change_id, known_tasks(changes_dir, exclude=change_id))
+        parsed = parse_design(text, change_id, known_tasks(changes_dir, exclude=change_id),
+                              config.load_config(changes_dir.parent / "config.toml")["checks"])
         problems: list[str] = []
     except FactoryError as exc:  # parse_design only raises design_invalid
         parsed, problems = {"acceptance_criteria": [], "tasks": []}, exc.details
@@ -484,7 +526,8 @@ def approve(
     text = _design_text(folder)
     removed = _removed_tasks(text, folder)
     try:
-        parsed = parse_design(text, change_id, known_tasks(changes_dir, exclude=change_id))
+        parsed = parse_design(text, change_id, known_tasks(changes_dir, exclude=change_id),
+                              config.load_config(changes_dir.parent / "config.toml")["checks"])
     except FactoryError as exc:
         exc.details += removed
         raise

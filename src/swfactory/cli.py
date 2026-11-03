@@ -8,7 +8,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any, NoReturn
 
-from swfactory import __version__, board, config, design, improve, init, memory, models, paths, tasks
+from swfactory import __version__, board, config, design, improve, init, memory, models, paths, reviews, sessions, tasks
 from swfactory.output import (
     EXIT_ERROR,
     EXIT_OK,
@@ -128,6 +128,30 @@ def task_review(args: argparse.Namespace) -> Result:
     return tasks.review(args.task, args.type, args.agent, task_context(), args.model, args.effort)
 
 
+def review_complete(args: argparse.Namespace) -> Result:
+    if args.file == "-":
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "review.json"
+            path.write_text(sys.stdin.read(), encoding="utf-8")
+            return reviews.complete(args.task, args.review, path, task_context())
+    return reviews.complete(args.task, args.review, Path(args.file).resolve(), task_context())
+
+
+def review_wait(args: argparse.Namespace) -> Result:
+    return reviews.wait(args.task, args.review, args.timeout, task_context()), []
+
+
+def review_cancel(args: argparse.Namespace) -> Result:
+    return reviews.cancel(args.task, args.review, args.reason, task_context()), []
+
+
+def session_attach(args: argparse.Namespace) -> Result:
+    return sessions.attach(args.task, args.provider, args.session, args.role, args.parent,
+                           TaskStore(paths.state_dir())), []
+
+
 def task_publish(args: argparse.Namespace) -> Result:
     return tasks.publish(args.task, task_context())
 
@@ -216,7 +240,7 @@ def task_finish(args: argparse.Namespace) -> Result:
 def task_verify(args: argparse.Namespace) -> Result:
     if args.manual:
         return tasks.verify_manual(args.task, args.manual, Path(args.evidence).resolve(), task_context())
-    return tasks.verify(args.task, task_context())
+    return tasks.verify(args.task, task_context(), args.plan)
 
 
 # Command name ("task launch") -> handler.
@@ -236,6 +260,10 @@ HANDLERS: dict[str, Handler] = {
     "task verify": task_verify,
     "task submit": task_submit,
     "task review": task_review,
+    "task review-complete": review_complete,
+    "task review-wait": review_wait,
+    "task review-cancel": review_cancel,
+    "task session-attach": session_attach,
     "task finish": task_finish,
     "task publish": task_publish,
     "task merged": task_merged,
@@ -336,6 +364,7 @@ def build_parser() -> Parser:
 
     verify = command(task_cmds, "verify", "task verify", "run checks and acceptance criteria")
     verify.add_argument("task", type=task_id)
+    verify.add_argument("--plan", action="store_true", help="show executions and their obligations without running")
     verify.add_argument("--manual", metavar="AC", help="acceptance criterion verified by hand")
     verify.add_argument("--evidence", metavar="FILE", help="evidence file for --manual")
 
@@ -347,6 +376,26 @@ def build_parser() -> Parser:
     review.add_argument("--agent")
     review.add_argument("--model", help="default: the reviewer model chosen at launch")
     review.add_argument("--effort")
+
+    for name, handler in (("review-complete", "deliver a reserved review result"),
+                          ("review-wait", "wait for a review result without reading its terminal"),
+                          ("review-cancel", "abandon a review without terminating its agent")):
+        cmd = command(task_cmds, name, f"task {name}", handler)
+        cmd.add_argument("task", type=task_id)
+        cmd.add_argument("--review", required=True, help="review id returned at launch")
+        if name == "review-complete":
+            cmd.add_argument("--file", required=True, help="report JSON file, or - for stdin")
+        elif name == "review-wait":
+            cmd.add_argument("--timeout", type=float, default=60, help="seconds, between 0 and 60")
+        else:
+            cmd.add_argument("--reason", required=True)
+
+    attach = command(task_cmds, "session-attach", "task session-attach", "associate an agent session with a task")
+    attach.add_argument("task", type=task_id)
+    attach.add_argument("--provider", choices=sessions.PROVIDERS, required=True)
+    attach.add_argument("--session", required=True, help="provider session id")
+    attach.add_argument("--role", choices=sessions.ROLES, required=True)
+    attach.add_argument("--parent", help="provider parent session id, if known")
 
     finish = command(task_cmds, "finish", "task finish", "close a task when every gate passes")
     finish.add_argument("task", type=task_id)
@@ -397,6 +446,10 @@ def build_parser() -> Parser:
 def _validate(args: argparse.Namespace) -> None:
     if args.command == "init" and len(args.delete) != len(args.reason):
         raise UsageError("swfactory init: each --delete needs its --reason")
+    if args.command == "task review-wait" and not 0 <= args.timeout <= 60:
+        raise UsageError("review-wait --timeout must be between 0 and 60 seconds")
+    if args.command == "task verify" and args.plan and args.manual:
+        raise UsageError("verify --plan cannot be combined with --manual")
     if args.command == "task verify" and (args.manual is None) != (args.evidence is None):
         raise UsageError("swfactory task verify: --manual and --evidence go together")
 

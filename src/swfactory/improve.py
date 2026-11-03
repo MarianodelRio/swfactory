@@ -17,21 +17,16 @@ from __future__ import annotations
 
 import json
 import re
-import sqlite3
 from collections import Counter
 from importlib import resources
 from pathlib import Path
 from typing import Any
 
-from swfactory import activity, system
+from swfactory import sessions, telemetry
 from swfactory.output import mask_secrets
 from swfactory.state import State, TaskStore
 from swfactory.tasks import workspace_path
 
-CODEX_TOKEN_FIELDS = (
-    "input_tokens", "cached_input_tokens", "cache_write_input_tokens",
-    "output_tokens", "reasoning_output_tokens", "total_tokens",
-)
 REPEATED_LIMIT = 20
 
 SKILL_MD_MAX_LINES = 120
@@ -49,13 +44,16 @@ EmptyEvidence: dict[str, Any] = {
 def extract(task_ids: list[str], store: TaskStore, home: Path) -> dict[str, Any]:
     """One evidence record per task id, plus a coverage summary. A task id is never dropped, even
     with no resolvable state or session."""
-    tasks = [_extract_one(task_id, store, home) for task_id in task_ids]
+    index = sessions.codex_index(home)
+    tasks = [_extract_one(task_id, store, home, index) for task_id in task_ids]
     missing = [t["task"] for t in tasks if t["coverage"] == "missing"]
     summary = {"requested": len(task_ids), "resolvable": len(task_ids) - len(missing), "missing": missing}
-    return {"tasks": tasks, "coverage_summary": summary}
+    safe: dict[str, Any] = json.loads(mask_secrets(json.dumps({"tasks": tasks, "coverage_summary": summary})))
+    return safe
 
 
-def _extract_one(task_id: str, store: TaskStore, home: Path) -> dict[str, Any]:
+def _extract_one(task_id: str, store: TaskStore, home: Path,
+                 index: list[dict[str, Any]]) -> dict[str, Any]:
     record = store.read_task(task_id)
     if record is None:
         return {"task": task_id, "coverage": "missing", "coverage_gaps": ["no task state recorded for this task"]}
@@ -67,12 +65,26 @@ def _extract_one(task_id: str, store: TaskStore, home: Path) -> dict[str, Any]:
         claude: dict[str, Any] = dict(EmptyEvidence)
         codex: dict[str, Any] = dict(EmptyEvidence)
     else:
-        claude = _claude_evidence(home, workspace, gaps)
-        codex = _codex_evidence(home, workspace, gaps)
-        if claude["sessions"] == 0 and codex["sessions"] == 0:
+        registered = record.get("sessions", [])
+        claude = _claude_evidence(home, workspace, gaps, registered)
+        selected = sessions.select_codex(index, workspace, registered, gaps)
+        codex = telemetry.codex(selected, home, gaps)
+        if not (claude["sessions"] or claude["subagents"] or codex["sessions"]):
             gaps.append("no resolvable Claude or Codex session for this task's workspace")
+        registered_ids = {(s["provider"], s["id"]) for s in registered}
+        inferred_roots = any((provider, source["id"]) not in registered_ids and not source.get("parent")
+                             for provider, data in (("claude", claude), ("codex", codex))
+                             for source in data.get("sources", []))
+        if not registered or inferred_roots:
+            gaps.append("session membership is inferred from workspace paths; external validation may be missing")
 
-    if workspace is None or (claude["sessions"] == 0 and codex["sessions"] == 0):
+    lifecycle = _lifecycle(record, store)
+    if lifecycle["event_coverage"]["malformed_lines"]:
+        gaps.append("task event history contains malformed lines; lifecycle counts are partial")
+    if not lifecycle["event_coverage"]["available"]:
+        gaps.append("task event history is unavailable; event-derived lifecycle counts are unknown")
+    gaps = list(dict.fromkeys(gaps))
+    if workspace is None or not (claude["sessions"] or claude["subagents"] or codex["sessions"]):
         coverage = "missing"
     else:
         coverage = "partial" if gaps else "full"
@@ -81,7 +93,8 @@ def _extract_one(task_id: str, store: TaskStore, home: Path) -> dict[str, Any]:
         "task": task_id,
         "coverage": coverage,
         "coverage_gaps": gaps,
-        "lifecycle": _lifecycle(record),
+        "lifecycle": lifecycle,
+        "session_membership": "registered_and_discovered" if record.get("sessions") else "inferred",
         "evidence": {"claude": claude, "codex": codex},
     }
 
@@ -93,7 +106,7 @@ def _workspace_path(record: State) -> Path | None:
         return None
 
 
-def _lifecycle(record: State) -> dict[str, Any]:
+def _lifecycle(record: State, store: TaskStore) -> dict[str, Any]:
     attempts = record.get("attempts") or []
     reviews = record.get("reviews") or []
     by_type: dict[str, dict[str, Any]] = {}
@@ -101,7 +114,27 @@ def _lifecycle(record: State) -> dict[str, Any]:
         entry = by_type.setdefault(review.get("type", "unknown"), {"rounds": 0, "verdicts": []})
         entry["rounds"] += 1
         entry["verdicts"].append(review.get("verdict"))
+    events: Counter[str] = Counter()
+    malformed = 0
+    try:
+        lines = (store.root / f"{record['task']}.events.jsonl").read_text(encoding="utf-8").splitlines()
+    except (OSError, UnicodeError):
+        lines = []
+    for line in lines:
+        try:
+            event = json.loads(line)
+        except ValueError:
+            malformed += 1
+            continue
+        if isinstance(event, dict) and isinstance(event.get("event"), str):
+            events[event["event"]] += 1
     return {
+        "unblocks": events["unblock"] if lines else None,
+        "recovery_events": events["recover"] if lines else None,
+        "event_coverage": {"available": bool(lines), "malformed_lines": malformed},
+        "review_requests": len(record.get("review_runs", [])),
+        "review_results_recorded": len(reviews),
+        "review_history_scope": "recorded results only; unrecorded historical reviews are unknown",
         "state": record.get("state"),
         "blocked_reason": record.get("blocked_reason"),
         "attempts": len(attempts),
@@ -122,28 +155,49 @@ def _repeated_failing(counts: Counter[str], failures: Counter[str]) -> list[dict
 # --- Claude Code sessions --------------------------------------------------------------------------
 
 
-def _claude_evidence(home: Path, workspace: Path, gaps: list[str]) -> dict[str, Any]:
-    project_dir = activity.claude_project_dir(home, workspace)
-    sessions = sorted(project_dir.glob("*.jsonl")) if project_dir.is_dir() else []
-    subagent_files = sorted(project_dir.glob("*/subagents/*.jsonl")) if project_dir.is_dir() else []
+def _claude_evidence(home: Path, workspace: Path, gaps: list[str],
+                     registered: list[dict[str, Any]]) -> dict[str, Any]:
+    roots, subagent_files = sessions.claude_files(home, workspace, registered, gaps)
 
     tool_calls: Counter[str] = Counter()
     command_counts: Counter[str] = Counter()
     command_failures: Counter[str] = Counter()
     cost: dict[str, Any] = {"cost_usd": 0.0, "models": {}}
-    usage_only: dict[str, float] = {"input": 0, "output": 0, "cache_read": 0, "cache_creation": 0}
+    usage_only: dict[str, float] = {}
     files_with_cost_state = 0
     files_usage_only = 0
-    for path in [*sessions, *subagent_files]:
-        has_cost_state, file_usage = _parse_claude_transcript(path, tool_calls, command_counts, command_failures, cost)
+    root_cost_files = 0
+    child_costs: list[dict[str, Any]] = []
+    raw_calls: Counter[str] = Counter()
+    seen_tools: set[tuple[str, str]] = set()
+    seen_usage: dict[tuple[str, str], dict[str, float]] = {}
+    pending: dict[str, str] = {}
+    damaged: list[str] = []
+    for path in [*roots, *subagent_files]:
+        family = path.parent.parent.name if path in subagent_files else path.stem
+        file_cost: dict[str, Any] = {"cost_usd": 0.0, "models": {}}
+        has_cost_state, file_usage = _parse_claude_transcript(
+            path, tool_calls, command_counts, command_failures, file_cost,
+            family, raw_calls, seen_tools, seen_usage, pending, damaged,
+        )
+        if has_cost_state:
+            if path in subagent_files:
+                child_costs.append({"file": str(path), **file_cost})
+            else:
+                root_cost_files += 1
+                cost["cost_usd"] += file_cost["cost_usd"]
+                for model, values in file_cost["models"].items():
+                    target = cost["models"].setdefault(model, {})
+                    for key, value in values.items():
+                        target[key] = target.get(key, 0) + value
         if has_cost_state:
             files_with_cost_state += 1
         else:
             files_usage_only += 1
             for key, value in file_usage.items():
-                usage_only[key] += value
+                usage_only[key] = usage_only.get(key, 0) + value
 
-    if sessions and files_usage_only:
+    if (roots or subagent_files) and files_usage_only:
         if files_with_cost_state:
             gaps.append(
                 f"{files_usage_only} of {files_with_cost_state + files_usage_only} Claude session/subagent files "
@@ -155,7 +209,7 @@ def _claude_evidence(home: Path, workspace: Path, gaps: list[str]) -> dict[str, 
                 "no cost-state entry in Claude sessions for this task; tokens are summed from per-message usage"
             )
 
-    if files_with_cost_state:
+    if root_cost_files:
         tokens = {**cost, "files_with_cost_state": files_with_cost_state}
         if files_usage_only:
             tokens["files_usage_only"] = files_usage_only
@@ -163,8 +217,30 @@ def _claude_evidence(home: Path, workspace: Path, gaps: list[str]) -> dict[str, 
     else:
         tokens = {"estimated_from_usage": True, **usage_only}
 
+    for cmd in pending.values():
+        command_counts[cmd] += 1
+    if pending:
+        gaps.append(f"{len(pending)} Claude commands have no recorded result")
+    if child_costs:
+        gaps.append("Claude child cost states are listed separately; their overlap with root costs is unknown")
+    gaps.extend(damaged)
+    tokens["scope"] = "reported root-session totals; not a complete provider bill"
+    if child_costs:
+        tokens["subagent_cost_states"] = child_costs
     return {
-        "sessions": len(sessions),
+        "raw_tool_calls": dict(raw_calls),
+        "duplicate_tool_records": sum(raw_calls.values()) - sum(tool_calls.values()),
+        "command_outcomes": {"success": sum(command_counts.values()) - len(pending) - sum(command_failures.values()),
+                             "failure": sum(command_failures.values()), "unknown": 0, "pending": len(pending)},
+        "sources": [{"path": str(p), "id": p.stem, "parent": p.parent.parent.name if p in subagent_files else None}
+                    for p in [*roots, *subagent_files]],
+        "coverage": {"calls": {"raw": sum(raw_calls.values()), "unique": sum(tool_calls.values()),
+                               "status": "partial" if damaged else "observed"},
+                     "command_results": {"known": sum(command_counts.values()) - len(pending),
+                                         "pending": len(pending), "total": sum(command_counts.values())},
+                     "usage": {"root_cost_files": root_cost_files, "root_files": len(roots),
+                               "usage_only_files": files_usage_only, "aggregation": "root_sessions_only"}},
+        "sessions": len(roots),
         "tool_calls": dict(tool_calls),
         "repeated_failing_commands": _repeated_failing(command_counts, command_failures),
         "tokens": tokens,
@@ -174,24 +250,26 @@ def _claude_evidence(home: Path, workspace: Path, gaps: list[str]) -> dict[str, 
 
 def _parse_claude_transcript(
     path: Path, tool_calls: Counter[str], command_counts: Counter[str], command_failures: Counter[str],
-    cost: dict[str, Any],
+    cost: dict[str, Any], family: str, raw_calls: Counter[str], seen_tools: set[tuple[str, str]],
+    seen_usage: dict[tuple[str, str], dict[str, float]], pending: dict[str, str], damaged: list[str],
 ) -> tuple[bool, dict[str, float]]:
     """Parse one Claude Code transcript (a session or a subagent's). Returns whether a `cost-state`
     entry was found, and this file's own per-message usage (meaningful only when it wasn't — a file
     with a cost-state entry has its cost added to `cost` instead, never both, to avoid double-counting).
     Any unreadable or malformed line is skipped, never raised."""
-    empty_usage = {"input": 0.0, "output": 0.0, "cache_read": 0.0, "cache_creation": 0.0}
+    empty_usage: dict[str, float] = {}
     try:
         lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
     except OSError:
+        damaged.append(f"cannot read Claude file {path.name}")
         return False, empty_usage
-    pending: dict[str, str] = {}  # tool_use id -> masked command (Bash only)
     last_cost_state: dict[str, Any] | None = None
     file_usage = dict(empty_usage)
     for line in lines:
         try:
             event = json.loads(line)
         except ValueError:
+            damaged.append(f"malformed line in Claude file {path.name}")
             continue
         if not isinstance(event, dict):
             continue
@@ -199,10 +277,19 @@ def _parse_claude_transcript(
         if etype == "cost-state":
             last_cost_state = event  # each entry is a running total for the whole file, not a delta
         elif etype == "assistant":
-            _accumulate_assistant(event, tool_calls, file_usage, pending)
+            message = event.get("message")
+            content = message.get("content") if isinstance(message, dict) else None
+            if isinstance(content, list) and any(isinstance(b, dict) and b.get("type") == "tool_use"
+                                                 and not b.get("id") for b in content):
+                damaged.append(f"Claude file {path.name} has calls without ids; deduplication is partial")
+            _accumulate_assistant(event, tool_calls, file_usage, pending, family, raw_calls, seen_tools, seen_usage)
         elif etype == "user":
-            _accumulate_user_result(event, pending, command_counts, command_failures)
+            _accumulate_user_result(event, pending, command_counts, command_failures, family)
     if last_cost_state is not None:
+        if (type(last_cost_state.get("totalCostUSD")) not in (int, float)
+                or last_cost_state.get("hasUnknownModelCost")):
+            damaged.append(f"Claude file {path.name} has incomplete cost-state data")
+            return False, file_usage
         _accumulate_cost_state(last_cost_state, cost)
         return True, empty_usage
     return False, file_usage
@@ -228,18 +315,25 @@ def _accumulate_cost_state(event: dict[str, Any], cost: dict[str, Any]) -> None:
 
 def _accumulate_assistant(
     event: dict[str, Any], tool_calls: Counter[str], fallback: dict[str, float], pending: dict[str, str],
+    family: str, raw_calls: Counter[str], seen_tools: set[tuple[str, str]],
+    seen_usage: dict[tuple[str, str], dict[str, float]],
 ) -> None:
     message = event.get("message")
     if not isinstance(message, dict):
         return
     usage = message.get("usage")
     if isinstance(usage, dict):
+        message_id = message.get("id") or event.get("uuid")
+        usage_key = (family, str(message_id)) if message_id else None
+        previous = seen_usage.setdefault(usage_key, {}) if usage_key else {}
         fields = (("input_tokens", "input"), ("output_tokens", "output"),
                   ("cache_read_input_tokens", "cache_read"), ("cache_creation_input_tokens", "cache_creation"))
         for key, target in fields:
             value = usage.get(key)
             if isinstance(value, int | float):
-                fallback[target] += value
+                delta = max(0, value - previous.get(target, 0))
+                fallback[target] = fallback.get(target, 0) + delta
+                previous[target] = max(value, previous.get(target, 0))
     content = message.get("content")
     if not isinstance(content, list):
         return
@@ -247,14 +341,21 @@ def _accumulate_assistant(
         if not isinstance(block, dict) or block.get("type") != "tool_use":
             continue
         name = block.get("name") or "unknown"
-        tool_calls[name] += 1
+        raw_calls[name] += 1
         tool_id, block_input = block.get("id"), block.get("input")
+        if tool_id:
+            tool_key = (family, str(tool_id))
+            if tool_key in seen_tools:
+                continue
+            seen_tools.add(tool_key)
+        tool_calls[name] += 1
         if name == "Bash" and tool_id and isinstance(block_input, dict) and block_input.get("command"):
-            pending[tool_id] = mask_secrets(str(block_input["command"]))
+            pending[f"{family}:{tool_id}"] = mask_secrets(str(block_input["command"]))
 
 
 def _accumulate_user_result(
     event: dict[str, Any], pending: dict[str, str], command_counts: Counter[str], command_failures: Counter[str],
+    family: str,
 ) -> None:
     message = event.get("message")
     content = message.get("content") if isinstance(message, dict) else None
@@ -266,186 +367,12 @@ def _accumulate_user_result(
         tool_use_id = block.get("tool_use_id")
         if not isinstance(tool_use_id, str):
             continue
-        command = pending.pop(tool_use_id, None)
+        command = pending.pop(f"{family}:{tool_use_id}", None)
         if not command:
             continue
         command_counts[command] += 1
         if block.get("is_error"):
             command_failures[command] += 1
-
-
-# --- Codex sessions ---------------------------------------------------------------------------------
-
-
-def _codex_evidence(home: Path, workspace: Path, gaps: list[str]) -> dict[str, Any]:
-    root = home / ".codex" / "sessions"
-    matches: list[tuple[Path, dict[str, Any]]] = []
-    if root.is_dir():
-        for path in sorted(root.glob("*/*/*/rollout-*.jsonl")):
-            meta = _codex_meta(path)
-            if meta and system.same_path(meta.get("cwd"), workspace):
-                matches.append((path, meta))
-
-    tool_calls: Counter[str] = Counter()
-    command_counts: Counter[str] = Counter()
-    command_failures: Counter[str] = Counter()
-    unsupported_calls: Counter[str] = Counter()
-    tokens: dict[str, float] = {}
-    found_tokens = False
-    for path, _meta in matches:
-        found_tokens |= _parse_codex_rollout(
-            path, tool_calls, command_counts, command_failures, unsupported_calls, tokens,
-        )
-
-    sqlite_tokens = _codex_sqlite_tokens(home, [meta for _, meta in matches])
-    if sqlite_tokens is not None:
-        tokens = sqlite_tokens
-    elif matches and not found_tokens:
-        gaps.append("no token fields found in Codex rollout files for this task (codex-cli schema drift?)")
-
-    total_unsupported = sum(unsupported_calls.values())
-    if total_unsupported:
-        gaps.append(
-            f"{total_unsupported} Codex tool call(s) use an argument format this extractor doesn't parse (e.g. "
-            "execution code embedded as a script call rather than a `command` argument); their command text and "
-            "success/failure are unknown, not absent from repeated_failing_commands — see unsupported_calls"
-        )
-
-    return {
-        "sessions": len(matches),
-        "tool_calls": dict(tool_calls),
-        "repeated_failing_commands": _repeated_failing(command_counts, command_failures),
-        "unsupported_calls": dict(unsupported_calls),
-        "tokens": tokens,
-        "subagents": sum(1 for _, meta in matches if _codex_is_subagent(meta)),
-    }
-
-
-def _codex_meta(path: Path) -> dict[str, Any] | None:
-    try:
-        with path.open(encoding="utf-8") as handle:
-            meta = json.loads(handle.readline()).get("payload", {})
-    except (OSError, ValueError, AttributeError):
-        return None
-    return meta if isinstance(meta, dict) and isinstance(meta.get("cwd"), str) else None
-
-
-def _codex_is_subagent(meta: dict[str, Any]) -> bool:
-    return "subagent" in json.dumps(meta.get("source", "")).lower()
-
-
-def _parse_codex_rollout(
-    path: Path, tool_calls: Counter[str], command_counts: Counter[str], command_failures: Counter[str],
-    unsupported_calls: Counter[str], tokens: dict[str, float],
-) -> bool:
-    try:
-        lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
-    except OSError:
-        return False
-    pending: dict[str, str] = {}
-    found_tokens = False
-    for line in lines[1:]:  # the first line is the session meta, already read
-        try:
-            event = json.loads(line)
-        except ValueError:
-            continue
-        payload = event.get("payload") if isinstance(event, dict) else None
-        if not isinstance(payload, dict):
-            continue
-        kind = payload.get("type") or (event.get("type") if isinstance(event, dict) else None)
-        if kind in ("function_call", "custom_tool_call"):
-            _codex_record_call(payload, tool_calls, pending, unsupported_calls)
-        elif kind in ("function_call_output", "custom_tool_call_output"):
-            _codex_record_result(payload, pending, command_counts, command_failures)
-        found_tokens |= _codex_accumulate_tokens(payload, tokens)
-    return found_tokens
-
-
-_JS_EXEC_COMMAND_RE = re.compile(
-    r"tools\.exec_command\(\s*\{\s*cmd\s*:\s*(['\"])(?P<cmd>(?:\\.|(?!\1).)*)\1", re.DOTALL,
-)
-
-
-def _codex_extract_command(payload: dict[str, Any]) -> str | None:
-    """The reliably parseable subset of Codex call-argument shapes: a `command` field (string or
-    JSON-encoded string), or the observed `tools.exec_command({cmd: "..."})` script-call shape.
-    Anything else is left unrecognized rather than guessed at or evaluated as code."""
-    arguments = payload.get("arguments")
-    if isinstance(arguments, str):
-        try:
-            parsed = json.loads(arguments)
-        except ValueError:
-            parsed = None
-        if isinstance(parsed, dict) and parsed.get("command"):
-            return str(parsed["command"])
-    elif isinstance(arguments, dict) and arguments.get("command"):
-        return str(arguments["command"])
-
-    for field in ("arguments", "input"):
-        value = payload.get(field)
-        if isinstance(value, str):
-            match = _JS_EXEC_COMMAND_RE.search(value)
-            if match:
-                return match.group("cmd").replace("\\\"", "\"").replace("\\'", "'")
-    return None
-
-
-def _codex_record_call(
-    payload: dict[str, Any], tool_calls: Counter[str], pending: dict[str, str], unsupported_calls: Counter[str],
-) -> None:
-    name = payload.get("name") or "unknown"
-    tool_calls[name] += 1
-    call_id = payload.get("call_id") or payload.get("id")
-    if not call_id:
-        return
-    command = _codex_extract_command(payload)
-    if command:
-        pending[call_id] = mask_secrets(command)
-    else:
-        unsupported_calls[name] += 1
-
-
-def _codex_record_result(
-    payload: dict[str, Any], pending: dict[str, str], command_counts: Counter[str], command_failures: Counter[str],
-) -> None:
-    call_id = payload.get("call_id") or payload.get("id")
-    command = pending.pop(call_id, None) if call_id else None
-    if not command:
-        return
-    command_counts[command] += 1
-    exit_code = payload.get("exit_code")
-    if isinstance(exit_code, int) and exit_code != 0:
-        command_failures[command] += 1
-
-
-def _codex_accumulate_tokens(payload: dict[str, Any], tokens: dict[str, float]) -> bool:
-    usage = payload.get("usage")
-    source = usage if isinstance(usage, dict) else payload
-    found = False
-    for field in CODEX_TOKEN_FIELDS:
-        value = source.get(field)
-        if isinstance(value, int | float):
-            tokens[field] = tokens.get(field, 0) + value
-            found = True
-    return found
-
-
-def _codex_sqlite_tokens(home: Path, metas: list[dict[str, Any]]) -> dict[str, float] | None:
-    db_path = home / ".codex" / "state_5.sqlite"
-    ids = {meta.get("id") for meta in metas if meta.get("id")}
-    if not db_path.is_file() or not ids:
-        return None
-    try:
-        conn = sqlite3.connect(str(db_path))
-        try:
-            placeholders = ",".join("?" for _ in ids)
-            rows = conn.execute(f"SELECT tokens_used FROM threads WHERE id IN ({placeholders})", list(ids)).fetchall()
-        finally:
-            conn.close()
-    except sqlite3.Error:
-        return None
-    totals = [row[0] for row in rows if isinstance(row[0], int | float)]
-    return {"total_tokens": sum(totals)} if totals else None
 
 
 # --- audit ------------------------------------------------------------------------------------------

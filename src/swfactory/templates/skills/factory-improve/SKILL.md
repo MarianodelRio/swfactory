@@ -2,7 +2,7 @@
 name: factory-improve
 description: Evidence-based self-improvement runs for swfactory itself, over a person-named set of past tasks — reading task state plus the full Claude Code / Codex session transcripts, separating deterministic counts from judgment calls, and proposing evidence-cited ways to reduce rework and quota spend, writing a design_<slug>.md only after the person confirms each one. Use for "/factory-improve", "cómo mejorar la factory", "por qué se repitió este error", "audita las skills" or "propón mejoras a swfactory".
 ---
-<!-- factory-template: skills/factory-improve@1 -->
+<!-- factory-template: skills/factory-improve@2 -->
 
 # /factory-improve
 
@@ -29,7 +29,11 @@ running the full pipeline.
 
 `swfactory improve extract --tasks CHG-20.1,CHG-20.2,... --json` — one structured record per task
 (lifecycle facts, tool calls, repeated/failing commands, token totals, subagent counts), plus a
-`coverage_summary`. A task with `"coverage": "missing"` has no resolvable session: name it as a
+`coverage_summary`. Inspect raw and unique calls separately, `sources`, per-provider `coverage`,
+`command_outcomes`, `usage_by_session` and token scope. Unknown/pending outcomes are not
+successes. Root costs and child usage can overlap: never add their totals or compare billed cost
+across providers without complete, comparable sources. Unblocks and attempt recoveries are
+separate lifecycle counts; recorded reviews are not every historical review. A task with `"coverage": "missing"` has no resolvable session: name it as a
 gap in the shortlist, never silently drop it or read it as zero.
 
 ## 3. Flag outliers — deterministically

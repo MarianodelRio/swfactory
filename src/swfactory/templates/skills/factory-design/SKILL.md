@@ -2,7 +2,7 @@
 name: factory-design
 description: Research, design and register a change (CHG-N) for the Software Factory, with acceptance criteria and a task block, and approve or reject it only on the person's explicit message. Use when the person wants to design, plan or specify a change or feature with /factory-design, asks to change an existing design, or says "approve CHG-N" / "apruebo CHG-N" or "reject CHG-N".
 ---
-<!-- factory-template: skills/factory-design@3 -->
+<!-- factory-template: skills/factory-design@4 -->
 
 # /factory-design
 
@@ -39,7 +39,11 @@ changes need no design: suggest `/factory-quick`.
    proportional to the change. Every AC says how it is verified: a command `swfactory task verify`
    runs in the task's workspace without a shell (pipes, `&&` or redirections go inside
    `bash -c '...'`), or `manual` when only a person or a screenshot can prove it; tasks have clear boundaries
-   (not micro-steps); choose `complexity` and `review` with `references/reviews.md`.
+   (not micro-steps). Use `{check: test}` when a criterion shares the configured project check,
+   or define task `verification: {name: "command"}` and use `{verification: name}` for shared
+   criteria. A reference shares an execution, not proof of behavior: confirm the suite actually
+   tests that criterion. Avoid repeating a full suite as both a check and a literal AC command;
+   choose `complexity` and `review` with `references/reviews.md`.
 7. **Self-review** with a subagent playing `references/roles/design_critic.md`: could another
    agent implement this correctly without this conversation? Fix what it finds.
 8. **Validate**: `swfactory design register <id> --json`. Fix every problem in `error.details`

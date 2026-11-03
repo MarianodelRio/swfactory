@@ -90,11 +90,13 @@ def workspace_of(repo, task):
     return Path(record["workspace"]["orca_id"].split("::", 1)[1])
 
 
-def record_review(repo, capsys, task, kind, tmp_path):
+def record_review(repo, capsys, task, kind, tmp_path, run_id=None):
     head = git("rev-parse", "HEAD", cwd=workspace_of(repo, task))
     report = tmp_path / f"{kind}.json"
     report.write_text(json.dumps({"type": kind, "commit": head, "verdict": "pass", "findings": [
         {"severity": "minor", "file": "src/bookings.py", "line": 1, "problem": "terse name", "fix": "rename"}]}))
+    if run_id:
+        return ok(capsys, "task", "review-complete", task, "--review", run_id, "--file", str(report))
     return ok(capsys, "task", "review", task, "--record", str(report))
 
 
@@ -116,9 +118,11 @@ def test_full_flow_from_init_to_published_pr(initialized, fake_gh, capsys, tmp_p
     (tmp_path / "calendar.txt").write_text("4 occurrences shown")
     ok(capsys, "task", "verify", task, "--manual", "AC-02", "--evidence", str(tmp_path / "calendar.txt"))
     assert ok(capsys, "task", "submit", task)["reviews"] == ["quality", "conformance"]
-    assert ok(capsys, "task", "review", task, "--type", "conformance")["launched"] is True
-    record_review(repo, capsys, task, "quality", tmp_path)
-    record_review(repo, capsys, task, "conformance", tmp_path)
+    quality = ok(capsys, "task", "review", task, "--type", "quality")
+    record_review(repo, capsys, task, "quality", tmp_path, quality["review_id"])
+    conformance = ok(capsys, "task", "review", task, "--type", "conformance")
+    assert conformance["launched"] is True
+    record_review(repo, capsys, task, "conformance", tmp_path, conformance["review_id"])
     ok(capsys, "task", "finish", task, "--memory", "none")
     published = ok(capsys, "task", "publish", task)
     assert published["pull_request"]["number"] == 1

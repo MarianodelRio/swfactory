@@ -286,8 +286,8 @@ a screenshot, a page snapshot) and records it. Secret files are never accepted a
 
 ### Reviews
 
-After verifying, the agent re-reads its own diff and **submits** the task (`in_review`). Then come
-the reviews:
+After verifying, the agent re-reads its own diff and **submits** the task (`in_review`).
+Quality runs first; conformance starts after a current quality pass when both are required:
 
 - **Quality**: a read-only subagent reviews the diff for readability, structure, duplication,
   error handling, conventions and meaningful tests.
@@ -295,8 +295,8 @@ the reviews:
   criterion against the code and the evidence, and checks that the change stays in scope and
   respects existing decisions.
 
-Each reviewer ends with a verdict and its findings (`blocker`, `major`, `minor`), and never edits
-files. A review passes only when the reviewer says `pass` and there are no `blocker` or `major`
+Each reviewer delivers its verdict and findings (`blocker`, `major`, `minor`) directly to
+Factory under its reserved review id, and never edits product files. A review passes only when the reviewer says `pass` and there are no `blocker` or `major`
 findings: a reviewer's `fail` is kept even without findings. Otherwise the agent fixes them,
 verifies again and repeats that review. **After two rounds without a pass, the task is blocked**
 (`review_not_converging`), the findings are kept, and it is your call. `minor` findings don't block
@@ -664,3 +664,53 @@ warns about docs that still name an old skill or command (`/factory-implement`),
   numbering goes on after them.
 - `/factory-init` renames `docs/decisions/README.md` to `index.md`, offers to migrate leftovers of
   other workflows and creates a root `README.md` if there is none.
+
+## Durable review delivery
+
+New reviews have a `review_id`, a fixed target commit and a design digest. Run quality first,
+then conformance. `task review --type quality` returns a prompt for the native subagent; add
+`--agent` to launch in Orca. Reviewers deliver their own JSON with
+`task review-complete <task> --review <id> --file <report.json>` (`--file -` reads stdin).
+The lead uses `task review-wait <task> --review <id> --timeout 60`, without terminal scraping
+or scheduled wakeups. A timeout is still pending. Use `task review-cancel` with a reason to
+abandon a launch explicitly; it does not terminate the agent. Late results remain in history.
+`task show`, status and the board expose `review_status`, including stale passes. Finish uses
+that same freshness check. Existing `task review --record` remains for historical/manual reports.
+
+## Measurement and session attribution
+
+`task session-attach <task> --provider codex --session <id> --role validation` associates an
+external session with its task even outside the workspace. Roles are lead, review, validation
+and subagent; `--parent <id>` records known lineage. Register provider ids when available;
+never infer task ownership from proximity in time. Historical cwd discovery remains partial.
+
+`improve extract` now separates raw records, unique calls, duplicate records and known/unknown/
+pending outcomes. `sources` identifies the files behind the numbers. Codex usage is selected
+per session from SQLite (opened read-only) or its last cumulative rollout snapshot; missing
+rows no longer discard other session usage. Child usage/cost is listed separately where its
+scope may overlap the parent. These reported totals are not a complete billing measurement.
+Lifecycle counts distinguish attempts, recovery events, unblocks and recorded review results.
+
+## Sharing verification evidence
+
+Acceptance entries still accept command strings and `manual`. They also accept
+`{check: test}` to share the configured `[checks].test` execution, or `{verification: behavior}`
+to share a command defined in the task's optional `verification` map:
+
+```yaml
+verification:
+  behavior: "pytest tests/test_behavior.py"
+acceptance:
+  AC-01: {verification: behavior}
+  AC-02: {verification: behavior}
+  AC-03: {check: test}
+```
+
+`task verify --plan` shows each command and the obligations it satisfies without executing it.
+Each explicit shared verification runs once and its evidence is linked to all referencing
+criteria. Failures and missing programs propagate to all of them. Separate literal commands
+remain independent, even with identical text; design validation warns about duplicates.
+A second verify always runs again. Finish rejects evidence if the resolved commands/bindings
+changed, or code changed during verification. Shared evidence must still prove each criterion.
+During development use focused tests; for final acceptance run Factory verify directly.
+Reviewers inspect recorded evidence and repeat tests when investigating a concrete gap.
